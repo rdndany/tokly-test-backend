@@ -1,0 +1,73 @@
+import http from "http";
+import express, { Request, Response } from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { logger } from "./utils/logger";
+import { clerkMiddleware } from "@clerk/express";
+import connectDatabase from "./config/database";
+import config from "./config";
+import { initializeResend } from "./services/emailService";
+import { initSocket } from "./socket";
+import clerkWebhooks from "./webhooks/clerk.webhook";
+import onboardingRoutes from "./routes/onboardingRoutes";
+import userRoutes from "./routes/userRoutes";
+import projectRoutes from "./routes/projectRoutes";
+import workspaceRoutes from "./routes/workspaceRoutes";
+import invitationRoutes from "./routes/invitationRoutes";
+import uploadRoutes from "./routes/uploadRoutes";
+import projectFolderRoutes from "./routes/projectFolderRoutes";
+
+dotenv.config();
+
+initializeResend();
+
+const app = express();
+const httpServer = http.createServer(app);
+const PORT = config.port;
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  })
+);
+
+/* Webhook must use raw body for Svix signature verification */
+app.post(
+  "/webhooks/clerk",
+  express.raw({ type: "application/json" }),
+  clerkWebhooks
+);
+
+app.use(express.json());
+app.use(clerkMiddleware());
+
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({ ok: true, message: "Tokly backend" });
+});
+
+app.use("/api/users", onboardingRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/projects", projectRoutes);
+app.use("/api/workspaces", workspaceRoutes);
+app.use("/api/invitations", invitationRoutes);
+app.use("/api/upload", uploadRoutes);
+app.use("/api/folders", projectFolderRoutes);
+
+const start = async () => {
+  await connectDatabase();
+  initSocket(httpServer);
+  if (config.resend.apiKey) {
+    logger.info("Resend email service initialized");
+  }
+  httpServer.listen(PORT, () => {
+    logger.info(`Server running at http://localhost:${PORT}`);
+  });
+};
+
+start().catch((err) => {
+  logger.error("Failed to start:", err);
+  process.exit(1);
+});
