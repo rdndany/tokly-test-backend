@@ -11,8 +11,8 @@ function getPublishedPageUrl(subdomain: string, domain: string): string {
   return `https://${s}.${d}`;
 }
 
-/** Viewport for thumbnail: visible part only (nav + hero), no scroll. OG standard 1200x630. */
-const THUMBNAIL_VIEWPORT = { width: 1200, height: 630 };
+/** Desktop viewport for full-width layout capture (1920x1080). */
+const THUMBNAIL_VIEWPORT = { width: 1920, height: 1080 };
 
 /** Capture a screenshot of a URL and return PNG buffer. Returns null on failure. */
 export async function capturePageScreenshot(
@@ -46,7 +46,8 @@ export async function capturePageScreenshot(
         await new Promise(r => setTimeout(r, 200));
       })();
     `);
-    await new Promise((r) => setTimeout(r, 300));
+    // Extra wait for charts (Live Chart section) to fetch data and render
+    await new Promise((r) => setTimeout(r, 2500));
     // Hide elements marked for screenshot exclusion (e.g. Edit with Tokly badge)
     await page.evaluate(`
       document.querySelectorAll("[data-tokly-screenshot-exclude]").forEach(el => {
