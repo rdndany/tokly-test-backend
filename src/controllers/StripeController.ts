@@ -220,9 +220,25 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const creditsPerMonth =
+      typeof session.metadata?.creditsPerMonth === "string"
+        ? parseInt(session.metadata.creditsPerMonth, 10)
+        : 100;
+    const safeCredits = Number.isFinite(creditsPerMonth) && creditsPerMonth > 0
+      ? creditsPerMonth
+      : 100;
+
     try {
-      await UserModel.findByIdAndUpdate(userId, { $set: { plan: "pro" } });
-      logger.info("Stripe webhook: user upgraded to Pro", { userId });
+      await UserModel.findByIdAndUpdate(userId, {
+        $set: {
+          plan: "pro",
+          proCreditsPerMonth: safeCredits,
+        },
+      });
+      logger.info("Stripe webhook: user upgraded to Pro", {
+        userId,
+        creditsPerMonth: safeCredits,
+      });
     } catch (err) {
       logger.error("Stripe webhook: failed to update user plan", { userId, err });
       res.status(500).send("Internal error");

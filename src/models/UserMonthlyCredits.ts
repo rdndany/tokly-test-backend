@@ -1,12 +1,14 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-/** Free plan: 100 credits per month (total cap). */
-export const CREDITS_PER_MONTH = 100;
+/** Free plan: 30 credits per month (total cap). */
+export const CREDITS_PER_MONTH = 30;
 
 export interface UserMonthlyCreditsDocument extends Document {
   userId: string;
   month: string; // YYYY-MM (UTC)
   creditsUsed: number;
+  /** Pro flex credits used this month (subscription pool). Default 0. */
+  flexCreditsUsed?: number;
   updatedAt: Date;
 }
 
@@ -15,6 +17,7 @@ const userMonthlyCreditsSchema = new Schema<UserMonthlyCreditsDocument>(
     userId: { type: String, required: true, index: true },
     month: { type: String, required: true, index: true },
     creditsUsed: { type: Number, required: true, default: 0 },
+    flexCreditsUsed: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

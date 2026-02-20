@@ -17,6 +17,8 @@ export interface UserDocument extends Omit<Document, "_id"> {
   autoAcceptInvitations?: boolean;
   /** Subscription plan. Default 'free'. */
   plan?: PlanId;
+  /** Pro flex credits per month (from subscription). Default 100. Used when plan is 'pro'. */
+  proCreditsPerMonth?: number;
   /** Stripe customer id for Checkout (required with Accounts V2 / test mode). */
   stripeCustomerId?: string;
   createdAt: Date;
@@ -77,6 +79,10 @@ const userSchema = new Schema<UserDocument>({
     type: String,
     enum: ["free", "pro"],
     default: "free",
+  },
+  proCreditsPerMonth: {
+    type: Number,
+    default: 100,
   },
   stripeCustomerId: {
     type: String,

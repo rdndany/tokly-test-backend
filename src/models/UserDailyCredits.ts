@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-/** Free plan: credits per day. */
-export const CREDITS_PER_DAY = 10;
+/** Free plan: 5 credits per day. */
+export const CREDITS_PER_DAY = 5;
 
 export interface UserDailyCreditsDocument extends Document {
   userId: string;
