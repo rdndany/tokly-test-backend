@@ -1,17 +1,14 @@
 import { chromium } from "playwright";
-import config from "../config";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("ScreenshotService");
 
-/** Build the published project page URL for a given subdomain/domain */
+/** Build the published project page URL from subdomain + domain (e.g. https://global.toklyproject.site) */
 function getPublishedPageUrl(subdomain: string, domain: string): string {
-  const appUrl = (config.app?.url ?? "").replace(/\/$/, "");
-  if (!appUrl) return "";
-  const params = new URLSearchParams({
-    domain: domain.trim().toLowerCase(),
-  });
-  return `${appUrl}/project/${encodeURIComponent(subdomain.trim().toLowerCase())}?${params.toString()}`;
+  const s = subdomain.trim().toLowerCase();
+  const d = domain.trim().toLowerCase();
+  if (!s || !d || !/^[a-z0-9-]+$/.test(s)) return "";
+  return `https://${s}.${d}`;
 }
 
 /** Capture a screenshot of a URL and return PNG buffer. Returns null on failure. */
@@ -54,7 +51,7 @@ export async function captureAndUploadProjectThumbnail(
 ): Promise<void> {
   const url = getPublishedPageUrl(subdomain, domain);
   if (!url) {
-    logger.warn("Cannot capture thumbnail: APP_URL not configured");
+    logger.warn("Cannot capture thumbnail: invalid subdomain or domain");
     return;
   }
 
