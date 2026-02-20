@@ -56,9 +56,22 @@ export async function createProCheckoutSession(
   const successUrl = `${appUrl}/settings?tab=plans&checkout=success`;
   const cancelUrl = `${appUrl}/settings?tab=plans&checkout=cancelled`;
 
-  let customerEmail: string | undefined;
-  const user = await UserModel.findById(userId).select("email").lean();
-  if (user?.email) customerEmail = user.email;
+  const user = await UserModel.findById(userId).select("email name stripeCustomerId").lean();
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  let customerId: string | undefined = user.stripeCustomerId ?? undefined;
+  if (!customerId) {
+    const customer = await stripe.customers.create({
+      email: user.email ?? undefined,
+      name: user.name ?? undefined,
+      metadata: { userId },
+    });
+    customerId = customer.id;
+    await UserModel.findByIdAndUpdate(userId, { $set: { stripeCustomerId: customerId } });
+  }
 
   const productName =
     interval === "year"
@@ -68,7 +81,7 @@ export async function createProCheckoutSession(
   try {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      customer_email: customerEmail,
+      customer: customerId,
       client_reference_id: userId,
       metadata: {
         userId,
