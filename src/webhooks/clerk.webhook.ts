@@ -4,6 +4,7 @@ import { createClerkClient } from "@clerk/clerk-sdk-node";
 import config from "../config";
 import UserModel, { UserDocument } from "../models/User";
 import { processPendingInvitationsForEmail } from "../services/workspaceInvitationService";
+import { deleteUserData } from "../services/deleteUserDataService";
 import { emitMembersUpdated } from "../socket/events";
 import { createLogger } from "../utils/logger";
 
@@ -131,7 +132,12 @@ export const clerkWebhooks: RequestHandler = async (
       }
 
       case "user.deleted": {
-        await UserModel.findByIdAndDelete(data.id);
+        try {
+          await deleteUserData(data.id);
+        } catch (e) {
+          logger.error("Failed to cascade delete user data", { userId: data.id, error: e });
+          // Still return 200 so Clerk doesn't retry; user doc may be partial
+        }
         res.status(200).json({ success: true });
         return;
       }
