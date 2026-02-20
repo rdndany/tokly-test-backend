@@ -50,6 +50,7 @@ export async function completeOnboarding(
     companySize?: string;
     theme?: "light" | "dark" | "system";
     handle?: string;
+    autoAcceptInvitations?: boolean;
   };
 
   const fullName =
@@ -66,6 +67,8 @@ export async function completeOnboarding(
   const rawHandle =
     typeof body.handle === "string" ? body.handle.trim() : undefined;
   const handle = rawHandle ? rawHandle.toLowerCase() : undefined;
+  const autoAcceptInvitations =
+    typeof body.autoAcceptInvitations === "boolean" ? body.autoAcceptInvitations : undefined;
 
   try {
     await completeOnboardingService(userId, {
@@ -74,6 +77,7 @@ export async function completeOnboarding(
       companySize,
       theme,
       handle,
+      autoAcceptInvitations,
     });
     res.status(200).json({ success: true });
   } catch (error) {

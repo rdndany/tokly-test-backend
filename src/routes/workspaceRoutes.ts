@@ -6,6 +6,8 @@ import {
   updateWorkspace,
   leaveWorkspace,
   listMembers,
+  updateMemberRole,
+  removeMember,
   createInvitations,
   createInviteLink,
   listInvitations,
@@ -20,6 +22,8 @@ router.patch("/:workspaceId", checkAuth, updateWorkspace);
 router.post("/:workspaceId/leave", checkAuth, leaveWorkspace);
 
 router.get("/:workspaceId/members", checkAuth, listMembers);
+router.patch("/:workspaceId/members/:userId", checkAuth, updateMemberRole);
+router.delete("/:workspaceId/members/:userId", checkAuth, removeMember);
 router.post("/:workspaceId/invitations", checkAuth, createInvitations);
 router.post("/:workspaceId/invite-link", checkAuth, createInviteLink);
 router.get("/:workspaceId/invitations", checkAuth, listInvitations);

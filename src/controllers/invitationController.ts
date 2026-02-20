@@ -8,6 +8,7 @@ import {
 } from "../services/workspaceInvitationService";
 import UserModel from "../models/User";
 import { clerkClient } from "@clerk/express";
+import { emitInvitationsUpdated, emitMembersUpdated } from "../socket/events";
 
 const logger = createLogger("InvitationController");
 
@@ -73,6 +74,7 @@ export async function acceptInvitation(
 
   try {
     const result = await acceptInvitationByToken(token, userId);
+    emitMembersUpdated(result.workspaceId);
     res.status(200).json({ workspaceId: result.workspaceId });
   } catch (error) {
     logger.error("Accept invitation error:", error);
@@ -100,6 +102,21 @@ export async function listMyPendingInvitationsHandler(
       return;
     }
     const invitations = await listMyPendingInvitations(email);
+    const user = await UserModel.findById(userId).select("autoAcceptInvitations").lean();
+    const autoAccept = user?.autoAcceptInvitations !== false;
+    if (autoAccept && invitations.length > 0) {
+      for (const inv of invitations) {
+        try {
+          const result = await acceptInvitationByToken(inv.token, userId);
+          emitMembersUpdated(result.workspaceId);
+        } catch (acceptErr) {
+          logger.warn("Auto-accept invitation failed", { token: inv.token, error: acceptErr });
+        }
+      }
+      emitInvitationsUpdated(userId);
+      res.status(200).json({ invitations: [] });
+      return;
+    }
     res.status(200).json({ invitations });
   } catch (error) {
     logger.error("List my invitations error:", error);

@@ -9,6 +9,7 @@ import {
 } from "../services/userService";
 import { listPublicProjectsByUserId } from "../services/projectService";
 import { HANDLE_REGEX } from "../services/onboardingService";
+import UserModel from "../models/User";
 
 export async function getProfileByHandle(
   req: Request,
@@ -118,5 +119,22 @@ export async function unfollow(req: Request, res: Response): Promise<void> {
   } catch (error) {
     logger.error("Unfollow error:", error);
     res.status(500).json({ error: "Failed to unfollow" });
+  }
+}
+
+/** Requires auth. Returns the current user's preferences. */
+export async function getMyPreferences(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const user = await UserModel.findById(userId).select("autoAcceptInvitations").lean();
+    const autoAcceptInvitations = user?.autoAcceptInvitations !== false;
+    res.status(200).json({ autoAcceptInvitations });
+  } catch (error) {
+    logger.error("Get my preferences error:", error);
+    res.status(500).json({ error: "Failed to load preferences" });
   }
 }

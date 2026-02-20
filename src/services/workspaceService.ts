@@ -16,6 +16,8 @@ export interface WorkspaceListItem {
   createdAt: Date;
   updatedAt: Date;
   projectCount?: number;
+  /** Current user's role in this workspace (for UI: viewer = read-only) */
+  role?: WorkspaceRole;
 }
 
 export async function createWorkspace(
@@ -42,6 +44,7 @@ export async function createWorkspace(
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt,
     projectCount: 0,
+    role: "owner",
   };
 }
 
@@ -49,9 +52,15 @@ export async function listWorkspacesByUser(
   userId: string
 ): Promise<WorkspaceListItem[]> {
   const memberships = await WorkspaceMemberModel.find({ userId })
-    .select("workspaceId")
+    .select("workspaceId role")
     .lean();
   const workspaceIds = memberships.map((m) => m.workspaceId);
+  const roleMap = new Map(
+    memberships.map((m) => {
+      const role = m.role === "member" ? "editor" : (m.role as WorkspaceRole);
+      return [m.workspaceId.toString(), role];
+    })
+  );
 
   if (workspaceIds.length === 0) {
     return [];
@@ -79,6 +88,7 @@ export async function listWorkspacesByUser(
     createdAt: w.createdAt,
     updatedAt: w.updatedAt,
     projectCount: countMap.get(w._id.toString()) ?? 0,
+    role: roleMap.get(w._id.toString()) ?? "editor",
   }));
 }
 
@@ -170,15 +180,24 @@ export async function ensureUserCanManageWorkspace(
   }
 }
 
+/** Viewers can only read; editors, admins, and owners can create/edit/delete. */
+export async function ensureUserCanEditInWorkspace(
+  userId: string,
+  workspaceId: string
+): Promise<void> {
+  const role = await getMemberRole(userId, workspaceId);
+  if (!role) throw new Error("Access denied to this workspace");
+  if (role === "viewer") {
+    throw new Error("Viewers cannot modify workspace content");
+  }
+}
+
 export async function updateWorkspace(
   userId: string,
   workspaceId: string,
   input: { name?: string; avatar?: string | null }
 ): Promise<WorkspaceListItem> {
-  const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
-  if (!canAccess) {
-    throw new Error("Access denied to this workspace");
-  }
+  await ensureUserCanEditInWorkspace(userId, workspaceId);
 
   const setUpdate: Record<string, unknown> = {};
   const unsetUpdate: Record<string, 1> = {};
@@ -206,6 +225,8 @@ export async function updateWorkspace(
     const projectCount = await ProjectModel.countDocuments({
       workspaceId: w._id,
     });
+    const role = await getMemberRole(userId, workspaceId);
+    const normRole = role === "member" ? "editor" : (role ?? "editor");
     return {
       id: w._id.toString(),
       name: w.name,
@@ -214,6 +235,7 @@ export async function updateWorkspace(
       createdAt: w.createdAt,
       updatedAt: w.updatedAt,
       projectCount,
+      role: normRole as WorkspaceRole,
     };
   }
 
@@ -231,6 +253,9 @@ export async function updateWorkspace(
     workspaceId: workspace._id,
   });
 
+  const role = await getMemberRole(userId, workspaceId);
+  const normRole = role === "member" ? "editor" : (role ?? "editor");
+
   return {
     id: workspace._id.toString(),
     name: workspace.name,
@@ -239,6 +264,7 @@ export async function updateWorkspace(
     createdAt: workspace.createdAt,
     updatedAt: workspace.updatedAt,
     projectCount,
+    role: normRole as WorkspaceRole,
   };
 }
 
@@ -261,6 +287,62 @@ export async function leaveWorkspace(
   await WorkspaceMemberModel.deleteOne({
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
     userId,
+  });
+}
+
+const MANAGABLE_ROLES: WorkspaceRole[] = ["admin", "editor", "viewer"];
+
+/** Update a member's role. Caller must be owner or admin. Cannot change owner's role. */
+export async function updateMemberRole(
+  workspaceId: string,
+  memberUserId: string,
+  newRole: "admin" | "editor" | "viewer",
+  currentUserId: string
+): Promise<void> {
+  await ensureUserCanManageWorkspace(currentUserId, workspaceId);
+
+  const member = await WorkspaceMemberModel.findOne({
+    workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    userId: memberUserId,
+  });
+  if (!member) throw new Error("Member not found");
+  if (memberUserId === currentUserId) {
+    throw new Error("You cannot change your own role");
+  }
+  if (member.role === "owner") {
+    throw new Error("Cannot change the owner's role");
+  }
+  if (!MANAGABLE_ROLES.includes(newRole as WorkspaceRole)) {
+    throw new Error("Invalid role");
+  }
+
+  member.role = newRole as WorkspaceRole;
+  await member.save();
+}
+
+/** Remove a member from the workspace. Caller must be owner or admin. Cannot remove owner. */
+export async function removeMember(
+  workspaceId: string,
+  memberUserId: string,
+  currentUserId: string
+): Promise<void> {
+  await ensureUserCanManageWorkspace(currentUserId, workspaceId);
+
+  const member = await WorkspaceMemberModel.findOne({
+    workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    userId: memberUserId,
+  });
+  if (!member) throw new Error("Member not found");
+  if (memberUserId === currentUserId) {
+    throw new Error("You cannot remove yourself from the workspace");
+  }
+  if (member.role === "owner") {
+    throw new Error("Cannot remove the workspace owner");
+  }
+
+  await WorkspaceMemberModel.deleteOne({
+    workspaceId: new mongoose.Types.ObjectId(workspaceId),
+    userId: memberUserId,
   });
 }
 
@@ -297,13 +379,22 @@ export async function listWorkspaceMembers(
 
   const userMap = new Map(users.map((u) => [u._id, u]));
 
+  const isClerkUserId = (s: string) => /^user_[a-zA-Z0-9]+$/.test(s);
+
   return members.map((m) => {
     const u = userMap.get(m.userId);
     const role = m.role === "member" ? "editor" : m.role;
+    const effectiveName =
+      u?.name && !isClerkUserId(u.name)
+        ? u.name
+        : (u?.fullName?.trim() || undefined);
+    const displayName = u?.handle
+      ? `@${u.handle}`
+      : effectiveName || u?.email || "Member";
     return {
       userId: m.userId,
       email: u?.email,
-      name: u?.name ?? u?.fullName,
+      name: displayName,
       image: u?.image,
       handle: u?.handle,
       role,

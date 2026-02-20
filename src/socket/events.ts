@@ -22,6 +22,11 @@ export function emitInvitationsUpdated(userId: string): void {
   emitToUser(userId, "invitations:updated", {});
 }
 
+/** Emit when the user is added to a workspace (e.g. auto-accept) so the client refetches workspace list. */
+export function emitWorkspacesUpdated(userId: string): void {
+  emitToUser(userId, "workspaces:updated", {});
+}
+
 export function emitFoldersUpdated(payload: {
   workspaceId?: string | null;
   userId: string;
@@ -38,4 +43,10 @@ export function emitFoldersUpdated(payload: {
 export function emitProjectsUpdated(workspaceId: string): void {
   if (!workspaceId) return;
   emitToWorkspace(workspaceId, "projects:updated", {});
+}
+
+/** Emit when workspace members list or roles change so clients can refetch members. */
+export function emitMembersUpdated(workspaceId: string): void {
+  if (!workspaceId) return;
+  emitToWorkspace(workspaceId, "members:updated", {});
 }

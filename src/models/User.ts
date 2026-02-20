@@ -11,6 +11,8 @@ export interface UserDocument extends Omit<Document, "_id"> {
   companyRole?: string;
   companySize?: string;
   theme?: string;
+  /** When true, workspace invitations are accepted automatically when listed. Default true. */
+  autoAcceptInvitations?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,6 +62,10 @@ const userSchema = new Schema<UserDocument>({
     type: String,
     trim: true,
     enum: ["light", "dark", "system"],
+  },
+  autoAcceptInvitations: {
+    type: Boolean,
+    default: true,
   },
   createdAt: {
     type: Date,

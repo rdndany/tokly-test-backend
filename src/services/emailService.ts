@@ -2,6 +2,7 @@ import { render } from "@react-email/render";
 import { Resend } from "resend";
 import ProjectCreateEmail from "../email-templates/projectCreateEmail";
 import WorkspaceInvitationEmail from "../email-templates/workspaceInvitationEmail";
+import WorkspaceAddedEmail from "../email-templates/workspaceAddedEmail";
 import config from "../config";
 import { createLogger } from "../utils/logger";
 
@@ -116,6 +117,54 @@ export const sendWorkspaceInvitationMail = async (
     return { success: true };
   } catch (err) {
     logger.error("Error sending workspace invitation email:", err);
+    return { success: false, error: err };
+  }
+};
+
+export const sendWorkspaceAddedMail = async (
+  to: string,
+  params: {
+    inviterName: string;
+    workspaceName: string;
+    role: string;
+    dashboardUrl: string;
+  }
+): Promise<{ success: boolean; error?: unknown }> => {
+  try {
+    const resend = getResend();
+    if (!resend) {
+      return { success: false, error: "Resend not initialized" };
+    }
+
+    const html = await render(
+      WorkspaceAddedEmail({
+        inviterName: params.inviterName,
+        workspaceName: params.workspaceName,
+        role: params.role,
+        dashboardUrl: params.dashboardUrl,
+      })
+    );
+
+    const { data, error } = await resend.emails.send({
+      from: config.resend.fromEmail,
+      to,
+      subject: `You've been added to ${params.workspaceName} on Tokly`,
+      html,
+    });
+
+    if (error) {
+      logger.error("Failed to send workspace added email:", error);
+      return { success: false, error };
+    }
+
+    logger.info("Workspace added email sent", {
+      to,
+      workspaceName: params.workspaceName,
+      id: data?.id,
+    });
+    return { success: true };
+  } catch (err) {
+    logger.error("Error sending workspace added email:", err);
     return { success: false, error: err };
   }
 };

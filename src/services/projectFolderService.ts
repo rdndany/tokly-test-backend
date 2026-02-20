@@ -2,7 +2,10 @@ import mongoose from "mongoose";
 import ProjectFolderModel from "../models/ProjectFolder";
 import ProjectModel from "../models/Project";
 import WorkspaceMemberModel from "../models/WorkspaceMember";
-import { ensureUserCanAccessWorkspace } from "./workspaceService";
+import {
+  ensureUserCanAccessWorkspace,
+  ensureUserCanEditInWorkspace,
+} from "./workspaceService";
 import { ensureUserCanEditProject } from "./projectService";
 import type { ProjectFolderType } from "../models/ProjectFolder";
 
@@ -39,10 +42,7 @@ export async function createFolder(
     if (!workspaceId) {
       throw new Error("Workspace ID is required for workspace folders");
     }
-    const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
-    if (!canAccess) {
-      throw new Error("Access denied to this workspace");
-    }
+    await ensureUserCanEditInWorkspace(userId, workspaceId);
   }
 
   const MAX_SUBFOLDER_DEPTH = 2; // Folder → Sub folder → Sub folder (3 levels total)
@@ -54,11 +54,10 @@ export async function createFolder(
       throw new Error("Access denied to this folder");
     }
     if (parent.type === "workspace" && parent.workspaceId) {
-      const canAccess = await ensureUserCanAccessWorkspace(
+      await ensureUserCanEditInWorkspace(
         userId,
         parent.workspaceId.toString()
       );
-      if (!canAccess) throw new Error("Access denied to this folder");
     }
     if (parent.type === "personal" && input.type === "workspace") {
       throw new Error(
@@ -125,6 +124,24 @@ async function canAccessFolder(
     return ensureUserCanAccessWorkspace(userId, folder.workspaceId.toString());
   }
   return false;
+}
+
+/** Throws if user cannot modify this folder (viewers cannot edit workspace folders). */
+async function ensureUserCanEditFolder(
+  userId: string,
+  folder: {
+    type: string;
+    userId?: string;
+    workspaceId?: mongoose.Types.ObjectId | null;
+  }
+): Promise<void> {
+  if (folder.type === "personal") {
+    if (folder.userId !== userId) throw new Error("Access denied to this folder");
+    return;
+  }
+  if (folder.type === "workspace" && folder.workspaceId) {
+    await ensureUserCanEditInWorkspace(userId, folder.workspaceId.toString());
+  }
 }
 
 export async function listFolders(
@@ -273,8 +290,7 @@ export async function updateFolder(
   const folder = await ProjectFolderModel.findById(folderId).lean();
   if (!folder) throw new Error("Folder not found");
 
-  const allowed = await canAccessFolder(userId, folder);
-  if (!allowed) throw new Error("Access denied to this folder");
+  await ensureUserCanEditFolder(userId, folder);
 
   const name = input.name?.trim();
   if (!name) throw new Error("Folder name is required");
@@ -316,8 +332,7 @@ export async function deleteFolder(
   const folder = await ProjectFolderModel.findById(folderId).lean();
   if (!folder) throw new Error("Folder not found");
 
-  const allowed = await canAccessFolder(userId, folder);
-  if (!allowed) throw new Error("Access denied to this folder");
+  await ensureUserCanEditFolder(userId, folder);
 
   await deleteFolderRecursive(folder._id);
 }
@@ -330,8 +345,7 @@ export async function addProjectsToFolder(
   const folder = await ProjectFolderModel.findById(folderId).lean();
   if (!folder) throw new Error("Folder not found");
 
-  const allowed = await canAccessFolder(userId, folder);
-  if (!allowed) throw new Error("Access denied to this folder");
+  await ensureUserCanEditFolder(userId, folder);
 
   const validIds = projectIds.filter((id) => id?.trim()).map((id) => id.trim());
   if (validIds.length === 0) return;
@@ -345,11 +359,14 @@ export async function addProjectsToFolder(
     if (folder.type === "personal") {
       if (project.userId !== userId) continue;
     } else if (folder.workspaceId) {
-      const canAccess = await ensureUserCanAccessWorkspace(
-        userId,
-        project.workspaceId?.toString() ?? ""
-      );
-      if (!canAccess) continue;
+      try {
+        await ensureUserCanEditInWorkspace(
+          userId,
+          project.workspaceId?.toString() ?? ""
+        );
+      } catch {
+        continue;
+      }
       if (project.workspaceId?.toString() !== folder.workspaceId.toString()) {
         continue;
       }

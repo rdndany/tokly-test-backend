@@ -73,13 +73,14 @@ export type OnboardingData = {
   companySize?: string;
   theme?: "light" | "dark" | "system";
   handle?: string;
+  autoAcceptInvitations?: boolean;
 };
 
 export async function completeOnboarding(
   userId: string,
   data: OnboardingData
 ): Promise<void> {
-  const { fullName, companyRole, companySize, theme, handle } = data;
+  const { fullName, companyRole, companySize, theme, handle, autoAcceptInvitations } = data;
 
   if (handle && !HANDLE_REGEX.test(handle)) {
     throw new Error("Invalid handle format");
@@ -97,6 +98,7 @@ export async function completeOnboarding(
   if (companySize !== undefined) update.companySize = companySize;
   if (theme) update.theme = theme;
   if (handle !== undefined) update.handle = handle;
+  if (autoAcceptInvitations !== undefined) update.autoAcceptInvitations = autoAcceptInvitations;
 
   await UserModel.findByIdAndUpdate(userId, update);
 

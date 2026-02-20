@@ -19,6 +19,8 @@ import type {
 } from "../types/tokenDetails";
 import {
   ensureUserCanAccessWorkspace,
+  ensureUserCanEditInWorkspace,
+  ensureUserCanManageWorkspace,
   getMemberRole,
 } from "./workspaceService";
 import { emitProjectUpdated, emitProjectsUpdated } from "../socket/events";
@@ -187,6 +189,7 @@ export type CreateProjectInput = {
 export async function createProject(input: CreateProjectInput) {
   const { userId, workspaceId, prompt, title, folderId } = input;
   if (!workspaceId) throw new Error("Workspace ID is required");
+  await ensureUserCanEditInWorkspace(userId, workspaceId);
   const uid = uuidv4();
   const shortId = uid.split("-").map((s) => s[0]).join("");
   const projectTitle = title?.trim() || `Project ${shortId}`;
@@ -486,7 +489,7 @@ export async function checkPublishUrlAvailability(
   return { available: !existing };
 }
 
-/** Update project publish address (subdomain+domain). Validates uniqueness. */
+/** Update project publish address (subdomain+domain). Validates uniqueness. Only owner and admin can publish. */
 export async function updateProjectPublishAddress(
   userId: string,
   projectId: string,
@@ -494,7 +497,12 @@ export async function updateProjectPublishAddress(
 ) {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
-  await ensureUserCanEditProject(userId, project);
+  const workspaceId = project.workspaceId?.toString();
+  if (workspaceId) {
+    await ensureUserCanManageWorkspace(userId, workspaceId);
+  } else {
+    if (project.userId !== userId) throw new Error("Forbidden");
+  }
 
   const subdomain = (input.subdomain || "").trim().toLowerCase();
   const domain = (input.domain || "").trim().toLowerCase();
@@ -550,11 +558,16 @@ export async function captureProjectThumbnail(
   return updated;
 }
 
-/** Unpublish project: set published to false and clear subdomain/domain. */
+/** Unpublish project: set published to false and clear subdomain/domain. Only owner and admin can unpublish. */
 export async function unpublishProject(userId: string, projectId: string) {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
-  await ensureUserCanEditProject(userId, project);
+  const workspaceId = project.workspaceId?.toString();
+  if (workspaceId) {
+    await ensureUserCanManageWorkspace(userId, workspaceId);
+  } else {
+    if (project.userId !== userId) throw new Error("Forbidden");
+  }
 
   await ProjectModel.updateOne(
     { _id: projectId },
@@ -2314,14 +2327,19 @@ export async function unstarProject(
   });
 }
 
+/** Only owner and admin can delete a workspace project; personal projects only by owner. */
 export async function deleteProject(
   userId: string,
   projectId: string
 ): Promise<void> {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
-  await ensureUserCanEditProject(userId, project);
   const workspaceId = project.workspaceId?.toString();
+  if (workspaceId) {
+    await ensureUserCanManageWorkspace(userId, workspaceId);
+  } else {
+    if (project.userId !== userId) throw new Error("Forbidden");
+  }
   const projectIdObj = new mongoose.Types.ObjectId(projectId);
   await Promise.all([
     ProjectChatMessageModel.deleteMany({ projectId: projectIdObj }),

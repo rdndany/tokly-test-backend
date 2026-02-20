@@ -1,7 +1,10 @@
 import { Request, Response } from "express";
 import { createLogger } from "../utils/logger";
 import config from "../config";
-import { sendWorkspaceInvitationMail } from "../services/emailService";
+import {
+  sendWorkspaceInvitationMail,
+  sendWorkspaceAddedMail,
+} from "../services/emailService";
 import {
   createWorkspace as createWorkspaceService,
   listWorkspacesByUser,
@@ -9,14 +12,21 @@ import {
   updateWorkspace as updateWorkspaceService,
   leaveWorkspace as leaveWorkspaceService,
   listWorkspaceMembers as listWorkspaceMembersService,
+  updateMemberRole as updateMemberRoleService,
+  removeMember as removeMemberService,
 } from "../services/workspaceService";
 import {
   createInvitation,
+  acceptInvitationByToken,
   createInviteLink as createInviteLinkService,
   listInvitations as listInvitationsService,
   cancelInvitation as cancelInvitationService,
 } from "../services/workspaceInvitationService";
-import { emitInvitationsUpdated } from "../socket/events";
+import {
+  emitInvitationsUpdated,
+  emitWorkspacesUpdated,
+  emitMembersUpdated,
+} from "../socket/events";
 import WorkspaceModel from "../models/Workspace";
 import UserModel from "../models/User";
 
@@ -176,6 +186,85 @@ export async function listMembers(req: Request, res: Response): Promise<void> {
   }
 }
 
+export async function updateMemberRole(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const workspaceId =
+    typeof req.params?.workspaceId === "string" ? req.params.workspaceId : undefined;
+  const memberUserId =
+    typeof req.params?.userId === "string" ? req.params.userId : undefined;
+
+  if (!workspaceId || !memberUserId) {
+    res.status(400).json({ error: "Workspace ID and user ID are required" });
+    return;
+  }
+
+  const roleInput = req.body?.role;
+  if (
+    typeof roleInput !== "string" ||
+    !["admin", "editor", "viewer"].includes(roleInput)
+  ) {
+    res.status(400).json({ error: "Valid role (admin, editor, viewer) is required" });
+    return;
+  }
+
+  try {
+    await updateMemberRoleService(
+      workspaceId,
+      memberUserId,
+      roleInput as "admin" | "editor" | "viewer",
+      userId
+    );
+    emitMembersUpdated(workspaceId);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Update member role error:", error);
+    const msg =
+      error instanceof Error ? error.message : "Failed to update role";
+    res.status(400).json({ error: msg });
+  }
+}
+
+export async function removeMember(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const workspaceId =
+    typeof req.params?.workspaceId === "string" ? req.params.workspaceId : undefined;
+  const memberUserId =
+    typeof req.params?.userId === "string" ? req.params.userId : undefined;
+
+  if (!workspaceId || !memberUserId) {
+    res.status(400).json({ error: "Workspace ID and user ID are required" });
+    return;
+  }
+
+  try {
+    await removeMemberService(workspaceId, memberUserId, userId);
+    emitMembersUpdated(workspaceId);
+    emitWorkspacesUpdated(memberUserId);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Remove member error:", error);
+    const msg =
+      error instanceof Error ? error.message : "Failed to remove member";
+    res.status(400).json({ error: msg });
+  }
+}
+
 export async function createInvitations(
   req: Request,
   res: Response
@@ -248,28 +337,67 @@ export async function createInvitations(
         role,
         invitedBy: userId,
       });
-      const acceptUrl = `${baseUrl}/invitations/accept?token=${inv.token}`;
-      const sent = await sendWorkspaceInvitationMail(email, {
-        inviterName,
-        workspaceName,
-        role,
-        acceptUrl,
-        expiresInDays: 7,
-      });
 
-      if (!sent.success) {
-        logger.warn("Invitation created but email failed", {
-          email,
-          error: sent.error,
+      const normalizedEmail = email.trim().toLowerCase();
+      const inviteeUser = await UserModel.findOne({
+        email: normalizedEmail,
+      })
+        .select("_id autoAcceptInvitations")
+        .lean();
+
+      const autoAccept =
+        inviteeUser?.autoAcceptInvitations !== false && inviteeUser?._id;
+
+      if (autoAccept && inviteeUser?._id) {
+        try {
+          await acceptInvitationByToken(inv.token, String(inviteeUser._id));
+          emitMembersUpdated(workspaceId);
+          emitWorkspacesUpdated(String(inviteeUser._id));
+          const dashboardUrl = `${baseUrl}/dashboard`;
+          const sent = await sendWorkspaceAddedMail(email, {
+            inviterName,
+            workspaceName,
+            role,
+            dashboardUrl,
+          });
+          if (!sent.success) {
+            logger.warn("Auto-accept: added email failed", {
+              email,
+              error: sent.error,
+            });
+          }
+        } catch (acceptErr) {
+          logger.warn("Auto-accept invitation failed, sending invite email", {
+            email,
+            error: acceptErr,
+          });
+          const acceptUrl = `${baseUrl}/invitations/accept?token=${inv.token}`;
+          await sendWorkspaceInvitationMail(email, {
+            inviterName,
+            workspaceName,
+            role,
+            acceptUrl,
+            expiresInDays: 7,
+          });
+        }
+      } else {
+        const acceptUrl = `${baseUrl}/invitations/accept?token=${inv.token}`;
+        const sent = await sendWorkspaceInvitationMail(email, {
+          inviterName,
+          workspaceName,
+          role,
+          acceptUrl,
+          expiresInDays: 7,
         });
+
+        if (!sent.success) {
+          logger.warn("Invitation created but email failed", {
+            email,
+            error: sent.error,
+          });
+        }
       }
 
-      // Notify invitee in real-time if they have an account
-      const inviteeUser = await UserModel.findOne({
-        email: email.trim().toLowerCase(),
-      })
-        .select("_id")
-        .lean();
       if (inviteeUser?._id) {
         emitInvitationsUpdated(String(inviteeUser._id));
       }

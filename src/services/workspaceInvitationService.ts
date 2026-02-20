@@ -6,6 +6,7 @@ import WorkspaceInvitationModel, {
 } from "../models/WorkspaceInvitation";
 import WorkspaceMemberModel from "../models/WorkspaceMember";
 import {
+  ensureUserCanAccessWorkspace,
   ensureUserCanManageWorkspace,
 } from "./workspaceService";
 
@@ -94,7 +95,8 @@ export async function listInvitations(
   workspaceId: string,
   userId: string
 ): Promise<InvitationItem[]> {
-  await ensureUserCanManageWorkspace(userId, workspaceId);
+  const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
+  if (!canAccess) throw new Error("Access denied to this workspace");
 
   const invitations = await WorkspaceInvitationModel.find({
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -209,20 +211,21 @@ export async function acceptInvitationByToken(
   return { workspaceId };
 }
 
-/** Process pending invitations for a user's email (call from Clerk user.created webhook) */
+/** Process pending invitations for a user's email (call from Clerk user.created webhook).
+ * Returns count and workspace IDs so callers can emit members:updated for each workspace. */
 export async function processPendingInvitationsForEmail(
   email: string,
   userId: string
-): Promise<number> {
+): Promise<{ count: number; workspaceIds: string[] }> {
   const normalized = email.trim().toLowerCase();
-  if (!normalized) return 0;
+  if (!normalized) return { count: 0, workspaceIds: [] };
 
   const pending = await WorkspaceInvitationModel.find({
     email: normalized,
     status: "pending",
   }).lean();
 
-  let count = 0;
+  const workspaceIds: string[] = [];
   for (const inv of pending) {
     if (inv.expiresAt < new Date()) {
       await WorkspaceInvitationModel.updateOne(
@@ -232,6 +235,7 @@ export async function processPendingInvitationsForEmail(
       continue;
     }
 
+    const workspaceIdStr = inv.workspaceId.toString();
     const existing = await WorkspaceMemberModel.findOne({
       workspaceId: inv.workspaceId,
       userId,
@@ -241,7 +245,7 @@ export async function processPendingInvitationsForEmail(
         { _id: inv._id },
         { status: "accepted", acceptedAt: new Date(), acceptedBy: userId }
       );
-      count++;
+      workspaceIds.push(workspaceIdStr);
       continue;
     }
 
@@ -254,9 +258,9 @@ export async function processPendingInvitationsForEmail(
       { _id: inv._id },
       { status: "accepted", acceptedAt: new Date(), acceptedBy: userId }
     );
-    count++;
+    workspaceIds.push(workspaceIdStr);
   }
-  return count;
+  return { count: workspaceIds.length, workspaceIds };
 }
 
 /** List pending workspace invitations for the current user (by email). */

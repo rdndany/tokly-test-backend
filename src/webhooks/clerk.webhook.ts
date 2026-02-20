@@ -4,6 +4,7 @@ import { createClerkClient } from "@clerk/clerk-sdk-node";
 import config from "../config";
 import UserModel, { UserDocument } from "../models/User";
 import { processPendingInvitationsForEmail } from "../services/workspaceInvitationService";
+import { emitMembersUpdated } from "../socket/events";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("ClerkWebhook");
@@ -87,12 +88,15 @@ export const clerkWebhooks: RequestHandler = async (
 
         if (email) {
           try {
-            const joined = await processPendingInvitationsForEmail(email, data.id);
-            if (joined > 0) {
+            const { count, workspaceIds } = await processPendingInvitationsForEmail(email, data.id);
+            if (count > 0) {
+              for (const workspaceId of workspaceIds) {
+                emitMembersUpdated(workspaceId);
+              }
               logger.info("Auto-joined workspaces from pending invitations", {
                 userId: data.id,
                 email,
-                count: joined,
+                count,
               });
             }
           } catch (e) {
