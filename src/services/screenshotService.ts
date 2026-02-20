@@ -33,9 +33,15 @@ export async function capturePageScreenshot(
     });
     // Small delay for any late-rendering content (e.g. fonts)
     await new Promise((r) => setTimeout(r, 500));
+    // Hide elements marked for screenshot exclusion (e.g. Edit with Tokly badge)
+    await page.evaluate(() => {
+      document.querySelectorAll("[data-tokly-screenshot-exclude]").forEach((el) => {
+        (el as HTMLElement).style.setProperty("display", "none", "important");
+      });
+    });
     const buffer = await page.screenshot({
       type: "png",
-      fullPage: false, // Visible viewport only (nav + hero), no scroll
+      fullPage: true,
     });
     return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   } catch (err) {
