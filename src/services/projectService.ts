@@ -524,6 +524,32 @@ export async function updateProjectPublishAddress(
   return updated;
 }
 
+/** Capture screenshot of published project and update thumbnailUrl. Requires subdomain + domain. */
+export async function captureProjectThumbnail(
+  userId: string,
+  projectId: string
+): Promise<Awaited<ReturnType<typeof getProjectById>>> {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  await ensureUserCanEditProject(userId, project);
+
+  const subdomain = (project.subdomain ?? "").trim().toLowerCase();
+  const domain = (project.domain ?? "").trim().toLowerCase();
+  if (!subdomain || !domain) {
+    throw new Error("Project must be published (have subdomain and domain) to capture thumbnail");
+  }
+
+  const { captureAndUploadProjectThumbnail } = await import(
+    "./screenshotService"
+  );
+  await captureAndUploadProjectThumbnail(projectId, subdomain, domain);
+  emitProjectUpdated(projectId);
+
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  return updated;
+}
+
 /** Unpublish project: set published to false and clear subdomain/domain. */
 export async function unpublishProject(userId: string, projectId: string) {
   const project = await getProjectById(projectId);

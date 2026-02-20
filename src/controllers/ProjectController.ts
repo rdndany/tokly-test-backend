@@ -42,6 +42,7 @@ import {
   updateProjectAuditKyc as updateAuditKycService,
   updateProjectListingPlatforms as updateListingPlatformsService,
   updateHideToklyBadge as updateHideToklyBadgeService,
+  captureProjectThumbnail as captureProjectThumbnailService,
 } from "../services/projectService";
 import { getProjectHistory as getProjectHistoryService } from "../services/projectHistoryService";
 import StarredProjectModel from "../models/StarredProject";
@@ -520,6 +521,35 @@ export async function updateHideToklyBadge(
         : "Failed to update Hide Tokly badge";
     const status =
       msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+export async function captureThumbnail(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  try {
+    const project = await captureProjectThumbnailService(userId, projectId);
+    res.status(200).json(project);
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : "Failed to capture thumbnail";
+    const status =
+      msg === "Project not found" ? 404
+      : msg === "Forbidden" ? 403
+      : msg?.includes("published") ? 400
+      : 500;
     res.status(status).json({ error: msg });
   }
 }

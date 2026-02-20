@@ -11,10 +11,13 @@ function getPublishedPageUrl(subdomain: string, domain: string): string {
   return `https://${s}.${d}`;
 }
 
+/** Viewport for thumbnail: visible part only (nav + hero), no scroll. OG standard 1200x630. */
+const THUMBNAIL_VIEWPORT = { width: 1200, height: 630 };
+
 /** Capture a screenshot of a URL and return PNG buffer. Returns null on failure. */
 export async function capturePageScreenshot(
   url: string,
-  viewport = { width: 1280, height: 720 }
+  viewport = THUMBNAIL_VIEWPORT
 ): Promise<Buffer | null> {
   let browser;
   try {
@@ -32,7 +35,7 @@ export async function capturePageScreenshot(
     await new Promise((r) => setTimeout(r, 500));
     const buffer = await page.screenshot({
       type: "png",
-      fullPage: false,
+      fullPage: false, // Visible viewport only (nav + hero), no scroll
     });
     return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   } catch (err) {

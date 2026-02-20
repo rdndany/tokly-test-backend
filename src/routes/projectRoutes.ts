@@ -19,6 +19,7 @@ import {
   updateProjectPublishAddress,
   unpublishProject,
   updateHideToklyBadge,
+  captureThumbnail,
   transferProject,
   removeProjectFromFolderHandler,
   updateSocialLinks,
@@ -68,6 +69,7 @@ router.patch("/:projectId/seo", checkAuth, updateProjectSeo);
 router.patch("/:projectId/publish-address", checkAuth, updateProjectPublishAddress);
 router.patch("/:projectId/unpublish", checkAuth, unpublishProject);
 router.patch("/:projectId/hide-tokly-badge", checkAuth, updateHideToklyBadge);
+router.post("/:projectId/capture-thumbnail", checkAuth, captureThumbnail);
 router.patch("/:projectId/transfer", checkAuth, transferProject);
 router.get("/:projectId/token-preview", checkAuth, getTokenPreview);
 router.post("/:projectId/generate-hero-text", checkAuth, generateHeroText);
