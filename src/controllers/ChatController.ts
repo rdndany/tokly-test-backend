@@ -49,14 +49,20 @@ export async function chat(req: Request, res: Response): Promise<void> {
 
   try {
     const result = await sendMessage(projectId, userId, message);
-    res.status(200).json({
+    const body: { message: string; history: typeof result.fullHistory; creditsRemaining?: number } = {
       message: result.message,
       history: result.fullHistory,
-    });
+    };
+    if (result.creditsRemaining != null) body.creditsRemaining = result.creditsRemaining;
+    res.status(200).json(body);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Chat failed";
+    const code = (err as { code?: string }).code;
     const status =
-      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+      code === "INSUFFICIENT_CREDITS" ? 402
+      : msg === "Project not found" ? 404
+      : msg === "Forbidden" ? 403
+      : 500;
     res.status(status).json({ error: msg });
   }
 }

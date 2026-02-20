@@ -21,6 +21,11 @@ import {
 } from "../utils/detectQuestionnaireRequest";
 import { extractLexicalText } from "../utils/lexicalHelpers";
 import { emitChatMessage, emitChatAssistant } from "../socket/events";
+import {
+  getCredits,
+  deductCredits,
+  requireCredits,
+} from "./creditsService";
 
 const openai =
   config.openai.apiKey ?
@@ -57,6 +62,15 @@ export type ChatMessage = {
 
 const HELPFUL_IDEAS_RECOMMENDATION =
   "Try picking a helpful idea below – for example, Choose Template – to get started.";
+
+/** Cost in credits from OpenAI usage: 0.5 for smaller responses, 1 for larger. */
+function creditCostFromUsage(usage?: {
+  total_tokens?: number;
+  completion_tokens?: number;
+}): number {
+  const total = usage?.total_tokens ?? usage?.completion_tokens ?? 0;
+  return total > 800 ? 1 : 0.5;
+}
 
 function formatNum(n: number, noDecimals = false): string {
   const f = (x: number) => (noDecimals ? Math.round(x) : Number(x.toFixed(2)));
@@ -282,7 +296,7 @@ export async function sendMessage(
   projectId: string,
   userId: string,
   userMessage: string
-): Promise<{ message: string; fullHistory: ChatMessage[] }> {
+): Promise<{ message: string; fullHistory: ChatMessage[]; creditsRemaining?: number }> {
   const project = await getProjectById(projectId);
   if (!project) {
     throw new Error("Project not found");
@@ -331,7 +345,8 @@ export async function sendMessage(
       });
       emitChatAssistant(projectId, { content: assistantContent, createdAt: new Date().toISOString() });
       const fullHistory = await getConversation(projectId, userId);
-      return { message: assistantContent, fullHistory };
+      const creditsInfo = await getCredits(userId);
+      return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
     }
     // No token and couldn't parse - use AI to respond naturally and steer toward setup
     if (!openai) {
@@ -352,9 +367,10 @@ export async function sendMessage(
         content: m.content,
       })),
     ];
+    let completionOnboard: OpenAI.Chat.Completions.ChatCompletion | null = null;
     let assistantContentOnboard: string;
     try {
-      const completionOnboard = await openai.chat.completions.create({
+      completionOnboard = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: apiMessagesOnboard,
         max_tokens: 512,
@@ -364,6 +380,13 @@ export async function sendMessage(
         "Hi! I'm here to help you create a crypto landing page. To get started, please complete the questions above – do you have a token address or is your token not launched yet?";
     } catch (openaiErr) {
       assistantContentOnboard = getFriendlyOpenAIErrorMessage(openaiErr);
+    }
+    const costOnboard = completionOnboard
+      ? creditCostFromUsage(completionOnboard.usage as { total_tokens?: number; completion_tokens?: number })
+      : 0;
+    if (costOnboard > 0) {
+      await requireCredits(userId, costOnboard);
+      await deductCredits(userId, costOnboard);
     }
     const responseTimeOnboard = Math.round((Date.now() - startTimeOnboard) / 1000);
     await ProjectChatMessageModel.create({
@@ -378,7 +401,12 @@ export async function sendMessage(
       createdAt: new Date().toISOString(),
     });
     const fullHistoryOnboard = await getConversation(projectId, userId);
-    return { message: assistantContentOnboard, fullHistory: fullHistoryOnboard };
+    const creditsAfterOnboard = costOnboard > 0 ? await getCredits(userId) : undefined;
+    return {
+      message: assistantContentOnboard,
+      fullHistory: fullHistoryOnboard,
+      creditsRemaining: creditsAfterOnboard?.remaining,
+    };
   }
 
   // Check if user is asking to update project details -> show questionnaire instead of AI reply
@@ -420,7 +448,8 @@ export async function sendMessage(
       responseTimeSeconds: 1,
     });
     const fullHistory = await getConversation(projectId, userId);
-    return { message: assistantContent, fullHistory };
+    const creditsInfo = await getCredits(userId);
+    return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
   }
 
   if (requestedQuestionnaire) {
@@ -471,7 +500,8 @@ export async function sendMessage(
       metadata: { requestQuestionnaire: requestedQuestionnaire },
     });
     const fullHistory = await getConversation(projectId, userId);
-    return { message: assistantContent, fullHistory };
+    const creditsInfo = await getCredits(userId);
+    return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
   }
 
   if (!openai) {
@@ -508,9 +538,10 @@ export async function sendMessage(
     ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
   ];
 
+  let completion: OpenAI.Chat.Completions.ChatCompletion | null = null;
   let assistantContent: string;
   try {
-    const completion = await openai.chat.completions.create({
+    completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: apiMessages,
       max_tokens: 1024,
@@ -519,6 +550,14 @@ export async function sendMessage(
       completion.choices[0]?.message?.content?.trim() ?? "I couldn't generate a response.";
   } catch (openaiErr) {
     assistantContent = getFriendlyOpenAIErrorMessage(openaiErr);
+  }
+
+  const cost = completion
+    ? creditCostFromUsage(completion.usage as { total_tokens?: number; completion_tokens?: number })
+    : 0;
+  if (cost > 0) {
+    await requireCredits(userId, cost);
+    await deductCredits(userId, cost);
   }
 
   const responseTimeSeconds = Math.round((Date.now() - startTime) / 1000);
@@ -537,7 +576,12 @@ export async function sendMessage(
   });
 
   const fullHistory = await getConversation(projectId, userId);
-  return { message: assistantContent, fullHistory };
+  const creditsAfter = cost > 0 ? await getCredits(userId) : undefined;
+  return {
+    message: assistantContent,
+    fullHistory,
+    creditsRemaining: creditsAfter?.remaining,
+  };
 }
 
 export async function getConversation(

@@ -40,6 +40,11 @@ const config = {
   app: {
     url: process.env.APP_URL || process.env.FRONTEND_URL || "https://lovable.dev",
   },
+
+  stripe: {
+    secretKey: process.env.STRIPE_SECRET_KEY || "",
+    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
+  },
 };
 
 export default config;

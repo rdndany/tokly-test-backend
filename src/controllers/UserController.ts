@@ -9,6 +9,7 @@ import {
 } from "../services/userService";
 import { listPublicProjectsByUserId } from "../services/projectService";
 import { HANDLE_REGEX } from "../services/onboardingService";
+import { getCredits } from "../services/creditsService";
 import UserModel from "../models/User";
 
 export async function getProfileByHandle(
@@ -130,11 +131,28 @@ export async function getMyPreferences(req: Request, res: Response): Promise<voi
     return;
   }
   try {
-    const user = await UserModel.findById(userId).select("autoAcceptInvitations").lean();
+    const user = await UserModel.findById(userId).select("autoAcceptInvitations plan").lean();
     const autoAcceptInvitations = user?.autoAcceptInvitations !== false;
-    res.status(200).json({ autoAcceptInvitations });
+    const plan = user?.plan === "pro" ? "pro" : "free";
+    res.status(200).json({ autoAcceptInvitations, plan });
   } catch (error) {
     logger.error("Get my preferences error:", error);
     res.status(500).json({ error: "Failed to load preferences" });
+  }
+}
+
+/** Requires auth. Returns the current user's credits (plan-based limits), usedToday, usedThisMonth, limit, plan. */
+export async function getMyCredits(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  try {
+    const credits = await getCredits(userId);
+    res.status(200).json(credits);
+  } catch (error) {
+    logger.error("Get my credits error:", error);
+    res.status(500).json({ error: "Failed to load credits" });
   }
 }

@@ -16,6 +16,8 @@ import workspaceRoutes from "./routes/workspaceRoutes";
 import invitationRoutes from "./routes/invitationRoutes";
 import uploadRoutes from "./routes/uploadRoutes";
 import projectFolderRoutes from "./routes/projectFolderRoutes";
+import stripeRoutes from "./routes/stripeRoutes";
+import { stripeWebhook } from "./controllers/StripeController";
 
 dotenv.config();
 
@@ -34,11 +36,16 @@ app.use(
   })
 );
 
-/* Webhook must use raw body for Svix signature verification */
+/* Webhooks must use raw body for signature verification */
 app.post(
   "/webhooks/clerk",
   express.raw({ type: "application/json" }),
   clerkWebhooks
+);
+app.post(
+  "/api/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  stripeWebhook
 );
 
 app.use(express.json());
@@ -55,6 +62,7 @@ app.use("/api/workspaces", workspaceRoutes);
 app.use("/api/invitations", invitationRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/folders", projectFolderRoutes);
+app.use("/api/stripe", stripeRoutes);
 
 const start = async () => {
   await connectDatabase();

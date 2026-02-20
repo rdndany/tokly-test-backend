@@ -1,5 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
+export type PlanId = "free" | "pro";
+
 export interface UserDocument extends Omit<Document, "_id"> {
   _id: string;
   email?: string;
@@ -13,6 +15,8 @@ export interface UserDocument extends Omit<Document, "_id"> {
   theme?: string;
   /** When true, workspace invitations are accepted automatically when listed. Default true. */
   autoAcceptInvitations?: boolean;
+  /** Subscription plan. Default 'free'. */
+  plan?: PlanId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,6 +70,11 @@ const userSchema = new Schema<UserDocument>({
   autoAcceptInvitations: {
     type: Boolean,
     default: true,
+  },
+  plan: {
+    type: String,
+    enum: ["free", "pro"],
+    default: "free",
   },
   createdAt: {
     type: Date,

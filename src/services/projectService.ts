@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { v4 as uuidv4 } from "uuid";
 import config from "../config";
 import ProjectModel from "../models/Project";
+import UserModel from "../models/User";
 import StarredProjectModel from "../models/StarredProject";
 import WorkspaceMemberModel from "../models/WorkspaceMember";
 import ProjectChatMessageModel from "../models/ProjectChatMessage";
@@ -592,6 +593,12 @@ export async function updateHideToklyBadge(
   if (!project) throw new Error("Project not found");
   await ensureUserCanEditProject(userId, project);
   const hideToklyBadge = input.hideToklyBadge === true;
+  if (hideToklyBadge) {
+    const user = await UserModel.findById(userId).select("plan").lean();
+    if (user?.plan !== "pro") {
+      throw new Error("Pro plan required to hide the Tokly badge");
+    }
+  }
   await ProjectModel.updateOne(
     { _id: projectId },
     { $set: { hideToklyBadge } }
