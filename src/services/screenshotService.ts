@@ -31,8 +31,22 @@ export async function capturePageScreenshot(
       waitUntil: "networkidle",
       timeout: 15000,
     });
-    // Small delay for any late-rendering content (e.g. fonts)
+    // Small delay for initial render (fonts, above-fold content)
     await new Promise((r) => setTimeout(r, 500));
+    // Scroll through the page to trigger lazy-loaded / scroll-dependent content
+    await page.evaluate(`
+      (async () => {
+        const step = 400;
+        const max = document.documentElement.scrollHeight;
+        for (let y = 0; y <= max; y += step) {
+          window.scrollTo(0, y);
+          await new Promise(r => setTimeout(r, 80));
+        }
+        window.scrollTo(0, 0);
+        await new Promise(r => setTimeout(r, 200));
+      })();
+    `);
+    await new Promise((r) => setTimeout(r, 300));
     // Hide elements marked for screenshot exclusion (e.g. Edit with Tokly badge)
     await page.evaluate(`
       document.querySelectorAll("[data-tokly-screenshot-exclude]").forEach(el => {
