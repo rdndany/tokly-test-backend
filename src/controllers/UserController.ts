@@ -141,15 +141,16 @@ export async function getMyPreferences(req: Request, res: Response): Promise<voi
   }
 }
 
-/** Requires auth. Returns the current user's credits (plan-based limits), usedToday, usedThisMonth, limit, plan. */
+/** Requires auth. Returns credits for the user. When workspaceId query param is provided and workspace is Pro, returns workspace-shared credits. */
 export async function getMyCredits(req: Request, res: Response): Promise<void> {
   const userId = req.auth?.userId;
   if (!userId) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }
+  const workspaceId = typeof req.query?.workspaceId === "string" ? req.query.workspaceId : undefined;
   try {
-    const credits = await getCredits(userId);
+    const credits = await getCredits(userId, workspaceId);
     res.status(200).json(credits);
   } catch (error) {
     logger.error("Get my credits error:", error);

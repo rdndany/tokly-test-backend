@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
-import WorkspaceModel from "../models/Workspace";
+import WorkspaceModel, { type WorkspacePlanStatus } from "../models/Workspace";
+import UserModel from "../models/User";
 import WorkspaceMemberModel, {
   type WorkspaceRole,
 } from "../models/WorkspaceMember";
@@ -18,6 +19,8 @@ export interface WorkspaceListItem {
   projectCount?: number;
   /** Current user's role in this workspace (for UI: viewer = read-only) */
   role?: WorkspaceRole;
+  /** free = default, inactive = unpaid (created by free user), pro = paid */
+  planStatus?: WorkspacePlanStatus;
 }
 
 export async function createWorkspace(
@@ -29,7 +32,14 @@ export async function createWorkspace(
     throw new Error("Workspace name must be 100 characters or less");
   }
 
-  const workspace = await WorkspaceModel.create({ name, createdBy: userId });
+  // New workspaces are always inactive until workspace is subscribed to Pro
+  const planStatus: WorkspacePlanStatus = "inactive";
+
+  const workspace = await WorkspaceModel.create({
+    name,
+    createdBy: userId,
+    planStatus,
+  });
   await WorkspaceMemberModel.create({
     workspaceId: workspace._id,
     userId,
@@ -45,6 +55,7 @@ export async function createWorkspace(
     updatedAt: workspace.updatedAt,
     projectCount: 0,
     role: "owner",
+    planStatus: workspace.planStatus ?? planStatus,
   };
 }
 
@@ -89,6 +100,7 @@ export async function listWorkspacesByUser(
     updatedAt: w.updatedAt,
     projectCount: countMap.get(w._id.toString()) ?? 0,
     role: roleMap.get(w._id.toString()) ?? "editor",
+    planStatus: (w.planStatus as WorkspacePlanStatus) ?? "free",
   }));
 }
 
@@ -134,6 +146,7 @@ export async function getOrCreateDefaultWorkspace(
           createdAt: workspace.createdAt,
           updatedAt: workspace.updatedAt,
           projectCount,
+          planStatus: (workspace.planStatus as WorkspacePlanStatus) ?? "free",
         };
       } finally {
         defaultWorkspaceCreationByUser.delete(userId);
@@ -142,6 +155,15 @@ export async function getOrCreateDefaultWorkspace(
     defaultWorkspaceCreationByUser.set(userId, promise);
   }
   return promise;
+}
+
+export async function getWorkspacePlanStatus(
+  workspaceId: string
+): Promise<WorkspacePlanStatus> {
+  const w = await WorkspaceModel.findById(workspaceId)
+    .select("planStatus")
+    .lean();
+  return (w?.planStatus as WorkspacePlanStatus) ?? "free";
 }
 
 export async function ensureUserCanAccessWorkspace(

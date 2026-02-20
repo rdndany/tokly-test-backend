@@ -51,6 +51,7 @@ import { sendMessage as sendChatMessage } from "../services/chatService";
 import {
   getOrCreateDefaultWorkspace,
   ensureUserCanAccessWorkspace,
+  getWorkspacePlanStatus,
   listWorkspacesByUser,
 } from "../services/workspaceService";
 
@@ -764,6 +765,15 @@ export async function createProject(
       res.status(403).json({ error: "Access denied to this workspace" });
       return;
     }
+  }
+
+  const planStatus = await getWorkspacePlanStatus(workspaceId);
+  if (planStatus === "inactive") {
+    res.status(403).json({
+      error: "WORKSPACE_INACTIVE",
+      message: "Your workspace is inactive. Upgrade to continue building.",
+    });
+    return;
   }
 
   try {

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import Stripe from "stripe";
 import config from "../config";
 import UserModel from "../models/User";
+import WorkspaceModel from "../models/Workspace";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("StripeController");
@@ -14,8 +15,10 @@ const MIN_AMOUNT_CENTS = 2500;
 const MAX_AMOUNT_CENTS = 300000;
 
 /**
- * POST body: { amountCents: number, creditsPerMonth: number, interval: "month" | "year" }
- * Creates a Stripe Checkout Session for Pro subscription with the given price.
+ * POST body: { amountCents: number, creditsPerMonth: number, interval: "month" | "year", workspaceId?: string }
+ * Creates a Stripe Checkout Session for Pro subscription.
+ * When workspaceId is provided, subscribes the workspace to Pro (credits shared by members).
+ * Otherwise subscribes the user (legacy).
  * Returns { url: string } to redirect the user to Stripe Checkout.
  */
 export async function createProCheckoutSession(
@@ -37,6 +40,7 @@ export async function createProCheckoutSession(
     amountCents?: number;
     creditsPerMonth?: number;
     interval?: string;
+    workspaceId?: string;
   };
 
   const amountCents = typeof body.amountCents === "number" ? body.amountCents : 0;
@@ -52,9 +56,23 @@ export async function createProCheckoutSession(
     return;
   }
 
+  const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : undefined;
+  if (workspaceId) {
+    const { ensureUserCanManageWorkspace } = await import("../services/workspaceService");
+    try {
+      await ensureUserCanManageWorkspace(userId!, workspaceId);
+    } catch {
+      res.status(403).json({ error: "Access denied to this workspace" });
+      return;
+    }
+  }
   const appUrl = config.app.url.replace(/\/$/, "");
-  const successUrl = `${appUrl}/settings?tab=plans&checkout=success`;
-  const cancelUrl = `${appUrl}/settings?tab=plans&checkout=cancelled`;
+  const successUrl = workspaceId
+    ? `${appUrl}/settings?tab=plans&checkout=success&workspaceId=${encodeURIComponent(workspaceId)}`
+    : `${appUrl}/settings?tab=plans&checkout=success`;
+  const cancelUrl = workspaceId
+    ? `${appUrl}/settings?tab=plans&checkout=cancelled&workspaceId=${encodeURIComponent(workspaceId)}`
+    : `${appUrl}/settings?tab=plans&checkout=cancelled`;
 
   const user = await UserModel.findById(userId).select("email name stripeCustomerId").lean();
   if (!user) {
@@ -87,6 +105,7 @@ export async function createProCheckoutSession(
         userId,
         creditsPerMonth: String(creditsPerMonth),
         interval,
+        ...(workspaceId && { workspaceId }),
       },
       line_items: [
         {
@@ -213,6 +232,7 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
     const userId = session.client_reference_id ?? session.metadata?.userId;
+    const workspaceId = session.metadata?.workspaceId;
 
     if (!userId) {
       logger.warn("Stripe webhook: checkout.session.completed missing userId");
@@ -228,19 +248,38 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
       ? creditsPerMonth
       : 100;
 
+    const subscriptionId = session.subscription
+      ? (typeof session.subscription === "string" ? session.subscription : session.subscription.id)
+      : undefined;
+
     try {
-      await UserModel.findByIdAndUpdate(userId, {
-        $set: {
-          plan: "pro",
-          proCreditsPerMonth: safeCredits,
-        },
-      });
-      logger.info("Stripe webhook: user upgraded to Pro", {
-        userId,
-        creditsPerMonth: safeCredits,
-      });
+      if (workspaceId && subscriptionId) {
+        await WorkspaceModel.findByIdAndUpdate(workspaceId, {
+          $set: {
+            planStatus: "pro",
+            proCreditsPerMonth: safeCredits,
+            stripeSubscriptionId: subscriptionId,
+          },
+        });
+        logger.info("Stripe webhook: workspace upgraded to Pro", {
+          workspaceId,
+          userId,
+          creditsPerMonth: safeCredits,
+        });
+      } else {
+        await UserModel.findByIdAndUpdate(userId, {
+          $set: {
+            plan: "pro",
+            proCreditsPerMonth: safeCredits,
+          },
+        });
+        logger.info("Stripe webhook: user upgraded to Pro", {
+          userId,
+          creditsPerMonth: safeCredits,
+        });
+      }
     } catch (err) {
-      logger.error("Stripe webhook: failed to update user plan", { userId, err });
+      logger.error("Stripe webhook: failed to update plan", { userId, workspaceId, err });
       res.status(500).send("Internal error");
       return;
     }

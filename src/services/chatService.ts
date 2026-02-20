@@ -345,7 +345,8 @@ export async function sendMessage(
       });
       emitChatAssistant(projectId, { content: assistantContent, createdAt: new Date().toISOString() });
       const fullHistory = await getConversation(projectId, userId);
-      const creditsInfo = await getCredits(userId);
+      const workspaceId = project.workspaceId?.toString();
+      const creditsInfo = await getCredits(userId, workspaceId);
       return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
     }
     // No token and couldn't parse - use AI to respond naturally and steer toward setup
@@ -385,8 +386,9 @@ export async function sendMessage(
       ? creditCostFromUsage(completionOnboard.usage as { total_tokens?: number; completion_tokens?: number })
       : 0;
     if (costOnboard > 0) {
-      await requireCredits(userId, costOnboard);
-      await deductCredits(userId, costOnboard);
+      const workspaceId = project.workspaceId?.toString();
+      await requireCredits(userId, costOnboard, workspaceId);
+      await deductCredits(userId, costOnboard, workspaceId);
     }
     const responseTimeOnboard = Math.round((Date.now() - startTimeOnboard) / 1000);
     await ProjectChatMessageModel.create({
@@ -401,7 +403,8 @@ export async function sendMessage(
       createdAt: new Date().toISOString(),
     });
     const fullHistoryOnboard = await getConversation(projectId, userId);
-    const creditsAfterOnboard = costOnboard > 0 ? await getCredits(userId) : undefined;
+    const workspaceIdOnboard = project.workspaceId?.toString();
+    const creditsAfterOnboard = costOnboard > 0 ? await getCredits(userId, workspaceIdOnboard) : undefined;
     return {
       message: assistantContentOnboard,
       fullHistory: fullHistoryOnboard,
@@ -448,7 +451,8 @@ export async function sendMessage(
       responseTimeSeconds: 1,
     });
     const fullHistory = await getConversation(projectId, userId);
-    const creditsInfo = await getCredits(userId);
+    const workspaceIdQ = project.workspaceId?.toString();
+    const creditsInfo = await getCredits(userId, workspaceIdQ);
     return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
   }
 
@@ -500,7 +504,8 @@ export async function sendMessage(
       metadata: { requestQuestionnaire: requestedQuestionnaire },
     });
     const fullHistory = await getConversation(projectId, userId);
-    const creditsInfo = await getCredits(userId);
+    const workspaceIdQ2 = project.workspaceId?.toString();
+    const creditsInfo = await getCredits(userId, workspaceIdQ2);
     return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
   }
 
@@ -556,8 +561,9 @@ export async function sendMessage(
     ? creditCostFromUsage(completion.usage as { total_tokens?: number; completion_tokens?: number })
     : 0;
   if (cost > 0) {
-    await requireCredits(userId, cost);
-    await deductCredits(userId, cost);
+    const workspaceId = project.workspaceId?.toString();
+    await requireCredits(userId, cost, workspaceId);
+    await deductCredits(userId, cost, workspaceId);
   }
 
   const responseTimeSeconds = Math.round((Date.now() - startTime) / 1000);
@@ -576,7 +582,8 @@ export async function sendMessage(
   });
 
   const fullHistory = await getConversation(projectId, userId);
-  const creditsAfter = cost > 0 ? await getCredits(userId) : undefined;
+  const workspaceIdFinal = project.workspaceId?.toString();
+  const creditsAfter = cost > 0 ? await getCredits(userId, workspaceIdFinal) : undefined;
   return {
     message: assistantContent,
     fullHistory,
