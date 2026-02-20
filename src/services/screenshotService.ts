@@ -47,7 +47,7 @@ export async function capturePageScreenshot(
       })();
     `);
     // Extra wait for Tokenomics pie chart and Live Chart iframe to load and render
-    await new Promise((r) => setTimeout(r, 6000));
+    await new Promise((r) => setTimeout(r, 2000));
     // Hide elements marked for screenshot exclusion (e.g. Edit with Tokly badge)
     await page.evaluate(`
       document.querySelectorAll("[data-tokly-screenshot-exclude]").forEach(el => {
@@ -56,7 +56,7 @@ export async function capturePageScreenshot(
     `);
     const buffer = await page.screenshot({
       type: "png",
-      fullPage: true,
+      fullPage: false,
     });
     return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   } catch (err) {
