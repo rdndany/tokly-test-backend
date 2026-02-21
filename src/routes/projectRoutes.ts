@@ -19,6 +19,9 @@ import {
   updateProjectPublishAddress,
   unpublishProject,
   updateHideToklyBadge,
+  getProjectByDomain,
+  getDomainSetupInfo,
+  updateProjectCustomDomain,
   captureThumbnail,
   transferProject,
   removeProjectFromFolderHandler,
@@ -53,6 +56,7 @@ const router = Router();
 
 router.get("/", checkAuth, listProjects);
 router.get("/by-publish-url", getProjectByPublishUrl); // Public – no auth
+router.get("/by-domain/:host", getProjectByDomain); // Public – no auth, for custom domain middleware
 router.get("/check-publish-url", checkAuth, checkPublishUrlAvailability);
 router.post("/", checkAuth, createProject);
 router.post("/:projectId/star", checkAuth, starProject);
@@ -69,6 +73,8 @@ router.patch("/:projectId/seo", checkAuth, updateProjectSeo);
 router.patch("/:projectId/publish-address", checkAuth, updateProjectPublishAddress);
 router.patch("/:projectId/unpublish", checkAuth, unpublishProject);
 router.patch("/:projectId/hide-tokly-badge", checkAuth, updateHideToklyBadge);
+router.get("/:projectId/domain-setup-info", checkAuth, getDomainSetupInfo);
+router.patch("/:projectId/custom-domain", checkAuth, updateProjectCustomDomain);
 router.post("/:projectId/capture-thumbnail", checkAuth, captureThumbnail);
 router.patch("/:projectId/transfer", checkAuth, transferProject);
 router.get("/:projectId/token-preview", checkAuth, getTokenPreview);

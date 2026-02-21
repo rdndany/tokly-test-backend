@@ -23,9 +23,11 @@ import {
   ensureUserCanEditInWorkspace,
   ensureUserCanManageWorkspace,
   getMemberRole,
+  getWorkspacePlanStatus,
 } from "./workspaceService";
 import { emitProjectUpdated, emitProjectsUpdated } from "../socket/events";
 import { logProjectChange } from "./projectHistoryService";
+import { VercelService } from "./vercelService";
 
 export async function ensureUserCanEditProject(
   userId: string,
@@ -257,6 +259,7 @@ export async function getProjectById(projectId: string) {
     subdomain: project.subdomain,
     domain: project.domain,
     published: project.published,
+    customDomain: (project as { customDomain?: string }).customDomain,
     totalSupply: (project as { totalSupply?: string }).totalSupply,
     allocations: (project as { allocations?: Array<{ id: string; name: string; percentage: number; color: string }> }).allocations,
     phases: (project as { phases?: Array<{ id: string; name: string; milestones: Array<{ id: string; text: string; completed: boolean }> }> }).phases,
@@ -409,6 +412,33 @@ export async function updateProjectSeo(
   return updated;
 }
 
+/** Get published project by custom domain (host). Public – no auth. Returns project for middleware rewrite. */
+export async function getProjectByDomain(host: string): Promise<{
+  id: string;
+  subdomain: string;
+  domain: string;
+} | null> {
+  const h = (host || "").trim().toLowerCase();
+  if (!h) return null;
+  const hostsToTry = [h];
+  if (h.startsWith("www.")) hostsToTry.push(h.slice(4));
+  else hostsToTry.push(`www.${h}`);
+  const project = await ProjectModel.findOne({
+    customDomain: { $in: hostsToTry },
+    published: true,
+    subdomain: { $exists: true, $ne: null },
+    domain: { $exists: true, $ne: null },
+  })
+    .select("_id subdomain domain")
+    .lean();
+  if (!project?.subdomain || !project.domain) return null;
+  return {
+    id: project._id.toString(),
+    subdomain: project.subdomain,
+    domain: project.domain,
+  };
+}
+
 /** Get published project by subdomain+domain. Returns null if not found or not published. Public – no auth. */
 export async function getProjectByPublishUrl(
   subdomain: string,
@@ -458,6 +488,7 @@ export async function getProjectByPublishUrl(
     subdomain: project.subdomain,
     domain: project.domain,
     published: project.published,
+    customDomain: (project as { customDomain?: string }).customDomain,
     totalSupply: (project as { totalSupply?: string }).totalSupply,
     allocations: (project as { allocations?: Array<{ id: string; name: string; percentage: number; color: string }> }).allocations,
     phases: (project as { phases?: Array<{ id: string; name: string; milestones: Array<{ id: string; text: string; completed: boolean }> }> }).phases,
@@ -580,6 +611,86 @@ export async function unpublishProject(userId: string, projectId: string) {
   const updated = await getProjectById(projectId);
   if (!updated) throw new Error("Project not found");
   logProjectChange(projectId, userId, "Unpublished project", "general");
+  emitProjectUpdated(projectId);
+  return updated;
+}
+
+/** Update or remove custom domain. Requires Pro (user or workspace). Custom domain must be unique. */
+export async function updateProjectCustomDomain(
+  userId: string,
+  projectId: string,
+  input: { customDomain: string | null }
+): Promise<Awaited<ReturnType<typeof getProjectById>>> {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  await ensureUserCanEditProject(userId, project);
+
+  const workspaceId = project.workspaceId?.toString();
+  let hasPro = false;
+  if (workspaceId) {
+    const planStatus = await getWorkspacePlanStatus(workspaceId);
+    hasPro = planStatus === "pro";
+  }
+  if (!hasPro) {
+    const user = await UserModel.findById(userId).select("plan").lean();
+    hasPro = user?.plan === "pro";
+  }
+  if (!hasPro) {
+    throw new Error("Pro plan required for custom domains");
+  }
+
+  const raw = (input.customDomain ?? "").trim().toLowerCase();
+  const customDomain = raw
+    .replace(/^https?:\/\//, "")
+    .split("/")[0]
+    .trim()
+    || null;
+
+  if (customDomain) {
+    if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(customDomain)) {
+      throw new Error("Please enter a valid domain (e.g. example.com)");
+    }
+    if (customDomain.length > 253) {
+      throw new Error("Domain is too long");
+    }
+    const existing = await ProjectModel.findOne({
+      customDomain,
+      _id: { $ne: new mongoose.Types.ObjectId(projectId) },
+    })
+      .select("_id")
+      .lean();
+    if (existing) {
+      throw new Error("This domain is already in use by another project");
+    }
+  }
+
+  const previousDomain = project.customDomain?.trim();
+
+  // When adding: add domain to Vercel (if configured)
+  if (customDomain && VercelService.isConfigured()) {
+    const isAvailable = await VercelService.isDomainAvailable(customDomain);
+    if (isAvailable) {
+      await VercelService.addDomain(customDomain);
+    }
+  }
+
+  const updateOp = customDomain
+    ? { $set: { customDomain } }
+    : { $unset: { customDomain: "" } };
+  await ProjectModel.updateOne({ _id: projectId }, updateOp);
+
+  // When removing: remove domain from Vercel (if configured)
+  if (!customDomain && previousDomain && VercelService.isConfigured()) {
+    try {
+      await VercelService.removeDomain(previousDomain);
+    } catch (err) {
+      logProjectChange(projectId, userId, "Vercel removeDomain failed (non-fatal)", "general");
+    }
+  }
+
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  logProjectChange(projectId, userId, "Updated custom domain", "general");
   emitProjectUpdated(projectId);
   return updated;
 }
@@ -2115,6 +2226,7 @@ export async function listProjectsByUser(
       subdomain: p.subdomain,
       domain: p.domain,
       published: p.published,
+      customDomain: (p as { customDomain?: string }).customDomain,
       totalSupply: (p as { totalSupply?: string }).totalSupply,
       allocations: (p as { allocations?: Array<{ id: string; name: string; percentage: number; color: string }> }).allocations,
       phases: (p as { phases?: Array<{ id: string; name: string; milestones: Array<{ id: string; text: string; completed: boolean }> }> }).phases,
@@ -2175,6 +2287,7 @@ export async function listProjectsByUser(
       subdomain: p.subdomain,
       domain: p.domain,
       published: p.published,
+      customDomain: (p as { customDomain?: string }).customDomain,
       totalSupply: (p as { totalSupply?: string }).totalSupply,
       allocations: (p as { allocations?: Array<{ id: string; name: string; percentage: number; color: string }> }).allocations,
       phases: (p as { phases?: Array<{ id: string; name: string; milestones: Array<{ id: string; text: string; completed: boolean }> }> }).phases,
@@ -2240,6 +2353,7 @@ export async function listProjectsByUser(
     subdomain: p.subdomain,
     domain: p.domain,
     published: p.published,
+    customDomain: (p as { customDomain?: string }).customDomain,
     totalSupply: (p as { totalSupply?: string }).totalSupply,
     allocations: (p as { allocations?: Array<{ id: string; name: string; percentage: number; color: string }> }).allocations,
     phases: (p as { phases?: Array<{ id: string; name: string; milestones: Array<{ id: string; text: string; completed: boolean }> }> }).phases,

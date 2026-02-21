@@ -9,6 +9,7 @@ const logger = createLogger("ProjectController");
 import {
   createProject as createProjectService,
   deleteProject as deleteProjectService,
+  ensureUserCanEditProject as ensureUserCanEditProjectService,
   generateHeroTextForProject as generateHeroTextForProjectService,
   getProjectById,
   getTokenPreview as getTokenPreviewService,
@@ -20,7 +21,9 @@ import {
   updateProjectVisibility as updateProjectVisibilityService,
   updateProjectSeo as updateProjectSeoService,
   getProjectByPublishUrl as getProjectByPublishUrlService,
+  getProjectByDomain as getProjectByDomainService,
   checkPublishUrlAvailability as checkPublishUrlAvailabilityService,
+  updateProjectCustomDomain as updateProjectCustomDomainService,
   updateProjectPublishAddress as updateProjectPublishAddressService,
   unpublishProject as unpublishProjectService,
   transferProject as transferProjectService,
@@ -44,6 +47,7 @@ import {
   updateHideToklyBadge as updateHideToklyBadgeService,
   captureProjectThumbnail as captureProjectThumbnailService,
 } from "../services/projectService";
+import { VercelService } from "../services/vercelService";
 import { getProjectHistory as getProjectHistoryService } from "../services/projectHistoryService";
 import StarredProjectModel from "../models/StarredProject";
 import { removeProjectFromFolder } from "../services/projectFolderService";
@@ -386,6 +390,35 @@ export async function getProjectOgData(
   }
 }
 
+export async function getProjectByDomain(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const host = req.params.host;
+  if (!host) {
+    res.status(400).json({ success: false, error: "Host is required" });
+    return;
+  }
+  try {
+    const project = await getProjectByDomainService(host);
+    if (!project) {
+      res.status(404).json({ success: false });
+      return;
+    }
+    res.status(200).json({
+      success: true,
+      project: {
+        _id: project.id,
+        subdomain: project.subdomain,
+        domain: project.domain,
+      },
+    });
+  } catch (error) {
+    logger.error("Get project by domain error:", error);
+    res.status(500).json({ success: false });
+  }
+}
+
 export async function getProjectByPublishUrl(
   req: Request,
   res: Response
@@ -492,6 +525,109 @@ export async function unpublishProject(
       err instanceof Error ? err.message : "Failed to unpublish project";
     const status =
       msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+export async function updateProjectCustomDomain(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  const customDomain =
+    typeof req.body?.customDomain === "string"
+      ? req.body.customDomain.trim() || null
+      : req.body?.customDomain === null
+        ? null
+        : undefined;
+  if (customDomain === undefined) {
+    res.status(400).json({ error: "customDomain is required (string or null to remove)" });
+    return;
+  }
+  try {
+    const project = await updateProjectCustomDomainService(userId, projectId, {
+      customDomain,
+    });
+    res.status(200).json(project);
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : "Failed to update custom domain";
+    const status =
+      msg === "Project not found" ? 404
+      : msg === "Forbidden" ? 403
+      : msg?.includes("Pro plan") ? 403
+      : msg?.includes("already in use") ? 409
+      : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+export async function getDomainSetupInfo(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const domain = typeof req.query.domain === "string" ? req.query.domain.trim() : "";
+  if (!projectId || !domain) {
+    res.status(400).json({ error: "Project ID and domain query parameter are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+
+    if (VercelService.isConfigured()) {
+      const result = await VercelService.getDomainSetupInfo(domain);
+      res.status(200).json(result);
+      return;
+    }
+
+    // Fallback when Vercel is not configured: simple CNAME to subdomain.domain
+    const sub = project.subdomain ?? "";
+    const dom = project.domain ?? "";
+    const cnameTarget = sub && dom ? `${sub}.${dom}` : "";
+    res.status(200).json({
+      verified: false,
+      verification: [],
+      configuration: null,
+      dnsSetupOptions: {
+        nameservers: null,
+        dnsRecords: {
+          title: "Add CNAME record",
+          description: "Point your domain to your project URL",
+          records: cnameTarget
+            ? [{ type: "CNAME", name: "@", value: cnameTarget, reason: "Project URL" }]
+            : [],
+          instructions: [
+            "Log in to your domain registrar's DNS management panel",
+            "Add a CNAME record: Name = @ or www, Value = " + (cnameTarget || "your-project-url"),
+            "DNS changes can take up to 24–48 hours to propagate",
+          ],
+          note: "Use @ for apex domain or www for www subdomain.",
+        },
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to get domain setup info";
+    const status = msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
     res.status(status).json({ error: msg });
   }
 }

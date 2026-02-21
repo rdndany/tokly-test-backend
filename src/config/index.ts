@@ -45,6 +45,13 @@ const config = {
     secretKey: process.env.STRIPE_SECRET_KEY || "",
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
   },
+
+  vercel: {
+    apiToken: process.env.VERCEL_API_TOKEN || "",
+    projectId: process.env.VERCEL_PROJECT_ID || "",
+    teamId: process.env.VERCEL_TEAM_ID || null,
+    apiUrl: "https://api.vercel.com",
+  },
 };
 
 export default config;

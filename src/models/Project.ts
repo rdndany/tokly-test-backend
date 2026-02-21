@@ -67,6 +67,8 @@ export interface ProjectDocument extends Document {
   domain?: string;
   /** True when the project has been published (has subdomain+domain and user completed publish flow) */
   published?: boolean;
+  /** Custom domain (e.g. "example.com") - Pro feature. User adds CNAME pointing to subdomain.domain */
+  customDomain?: string;
   /** Total token supply (e.g. 1000000000). Used for tokenomics section. */
   totalSupply?: string;
   /** Token allocation breakdown for tokenomics section */
@@ -314,6 +316,7 @@ const projectSchema = new Schema<ProjectDocument>(
     subdomain: { type: String, trim: true },
     domain: { type: String, trim: true },
     published: { type: Boolean },
+    customDomain: { type: String, trim: true, sparse: true },
     totalSupply: { type: String, trim: true },
     allocations: {
       type: [tokenAllocationSchema],
@@ -337,6 +340,8 @@ const projectSchema = new Schema<ProjectDocument>(
 
 // Unique subdomain+domain: no two projects can share the same publish URL
 projectSchema.index({ subdomain: 1, domain: 1 }, { unique: true, sparse: true });
+// Unique custom domain
+projectSchema.index({ customDomain: 1 }, { unique: true, sparse: true });
 
 const ProjectModel = mongoose.model<ProjectDocument>("Project", projectSchema);
 export default ProjectModel;
