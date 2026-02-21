@@ -118,11 +118,15 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
   if (!monthlyDocForFlex) {
     const prevPeriodKey = getPreviousPeriodKey(interval, periodKey);
     const prevDoc = await UserMonthlyCreditsModel.findOne({ userId, month: prevPeriodKey }).lean();
-    const prevFlexUsed = prevDoc?.flexCreditsUsed ?? 0;
-    const prevRollover = prevDoc?.flexCreditsRollover ?? 0;
-    const prevLimit = flexLimit + prevRollover;
-    const prevUnused = Math.max(0, prevLimit - prevFlexUsed);
-    const rollover = Math.min(prevUnused, flexLimit);
+    const rollover = prevDoc
+      ? (() => {
+          const prevFlexUsed = prevDoc.flexCreditsUsed ?? 0;
+          const prevRollover = prevDoc.flexCreditsRollover ?? 0;
+          const prevLimit = flexLimit + prevRollover;
+          const prevUnused = Math.max(0, prevLimit - prevFlexUsed);
+          return Math.min(prevUnused, flexLimit);
+        })()
+      : 0;
     await UserMonthlyCreditsModel.findOneAndUpdate(
       { userId, month: periodKey },
       { $setOnInsert: { creditsUsed: 0, flexCreditsUsed: 0, flexCreditsRollover: rollover } },
@@ -180,12 +184,16 @@ async function getWorkspaceCredits(
       workspaceId: new mongoose.Types.ObjectId(workspaceId),
       month: prevPeriodKey,
     }).lean();
-    const prevFlexUsed = prevDoc?.flexCreditsUsed ?? 0;
-    const prevLimit = flexLimit + (prevDoc?.flexCreditsRollover ?? 0);
-    const prevUnused = Math.max(0, prevLimit - prevFlexUsed);
-    const rollover = interval === "month"
-      ? Math.min(prevUnused, flexLimit)
-      : prevUnused;
+    const rollover = prevDoc
+      ? (() => {
+          const prevFlexUsed = prevDoc.flexCreditsUsed ?? 0;
+          const prevLimit = flexLimit + (prevDoc.flexCreditsRollover ?? 0);
+          const prevUnused = Math.max(0, prevLimit - prevFlexUsed);
+          return interval === "month"
+            ? Math.min(prevUnused, flexLimit)
+            : prevUnused;
+        })()
+      : 0;
     const wsId = new mongoose.Types.ObjectId(workspaceId);
     await WorkspaceMonthlyCreditsModel.findOneAndUpdate(
       { workspaceId: wsId, month: periodKey },
