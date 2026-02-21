@@ -48,6 +48,7 @@ import { getProjectHistory as getProjectHistoryService } from "../services/proje
 import StarredProjectModel from "../models/StarredProject";
 import { removeProjectFromFolder } from "../services/projectFolderService";
 import { sendMessage as sendChatMessage } from "../services/chatService";
+import { requireCredits } from "../services/creditsService";
 import {
   getOrCreateDefaultWorkspace,
   ensureUserCanAccessWorkspace,
@@ -774,6 +775,20 @@ export async function createProject(
       message: "Your workspace is inactive. Upgrade to continue building.",
     });
     return;
+  }
+
+  // Check credits before creating project (initial AI response costs at least 0.5)
+  try {
+    await requireCredits(userId, 0.5, workspaceId);
+  } catch (creditsErr) {
+    const msg =
+      creditsErr instanceof Error ? creditsErr.message : "Insufficient credits";
+    const code = (creditsErr as { code?: string }).code;
+    if (code === "INSUFFICIENT_CREDITS") {
+      res.status(402).json({ error: msg });
+      return;
+    }
+    throw creditsErr;
   }
 
   try {

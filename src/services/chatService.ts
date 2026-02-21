@@ -305,8 +305,30 @@ export async function sendMessage(
 
   const projectIdObj = new mongoose.Types.ObjectId(projectId);
   const trimmedMessage = userMessage.trim();
+  const workspaceId = project.workspaceId?.toString();
 
-  // Persist user message first
+  // Check credits before persisting user message (AI responses cost at least 0.5)
+  const hasToken =
+    (project.tokenDetails?.address && project.tokenDetails?.chain) ||
+    (project.tokenDetails?.name && project.tokenDetails?.symbol);
+  const parsed = !hasToken ? parseTokenAddressAndChain(trimmedMessage) : null;
+  const freeTokenParse = !hasToken && !!parsed;
+  if (!freeTokenParse) {
+    const recentForQuestionnaire = await ProjectChatMessageModel.find({ projectId: projectIdObj })
+      .sort({ createdAt: -1 })
+      .limit(2)
+      .lean();
+    const lastAssistant = recentForQuestionnaire.find((m) => m.role === "assistant")?.content ?? null;
+    const requestedQuestionnaire = hasToken
+      ? detectQuestionnaireRequest(trimmedMessage, lastAssistant)
+      : null;
+    const freeQuestionnaireAck = !!requestedQuestionnaire;
+    if (!freeQuestionnaireAck) {
+      await requireCredits(userId, 0.5, workspaceId);
+    }
+  }
+
+  // Persist user message
   await ProjectChatMessageModel.create({
     projectId: projectIdObj,
     role: "user",
@@ -326,12 +348,7 @@ export async function sendMessage(
   });
 
   // GUARD: Token details required (address+chain or name+symbol for pre-launch).
-  const hasToken =
-    (project.tokenDetails?.address && project.tokenDetails?.chain) ||
-    (project.tokenDetails?.name && project.tokenDetails?.symbol);
-
   if (!hasToken) {
-    const parsed = parseTokenAddressAndChain(trimmedMessage);
     if (parsed) {
       const updated = await updateProjectTokenDetails(userId, projectId, {
         address: parsed.address,
