@@ -143,7 +143,7 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
   const baseRemaining = Math.min(baseDailyRemaining, baseMonthlyRemaining);
   const remaining = flexRemaining + baseRemaining;
   const usedThisMonth = flexUsedPro + usedBaseMonth;
-  const limit = effectiveFlexLimit + limits.creditsPerMonth;
+  const limit = effectiveFlexLimit + limits.creditsPerDay;
 
   return {
     remaining,
@@ -230,7 +230,7 @@ async function getWorkspaceCredits(
 
   const remaining = flexRemaining + topUpRemaining + baseRemaining;
   const usedThisMonth = flexUsed;
-  const limit = effectiveFlexLimit + limits.creditsPerMonth + topUpRemaining;
+  const limit = effectiveFlexLimit + limits.creditsPerDay + topUpRemaining;
   const proRemaining = flexRemaining + topUpRemaining;
 
   return {
