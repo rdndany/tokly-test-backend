@@ -4,8 +4,9 @@ import { createClerkClient } from "@clerk/clerk-sdk-node";
 import config from "../config";
 import UserModel, { UserDocument } from "../models/User";
 import { processPendingInvitationsForEmail } from "../services/workspaceInvitationService";
+import { ensurePersonalWorkspace } from "../services/workspaceService";
 import { deleteUserData } from "../services/deleteUserDataService";
-import { emitMembersUpdated } from "../socket/events";
+import { emitMembersUpdated, emitWorkspacesUpdated } from "../socket/events";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("ClerkWebhook");
@@ -103,6 +104,19 @@ export const clerkWebhooks: RequestHandler = async (
           } catch (e) {
             logger.error("Failed to process pending invitations for new user", e);
           }
+        }
+
+        try {
+          const personal = await ensurePersonalWorkspace(data.id);
+          if (personal) {
+            emitWorkspacesUpdated(data.id);
+            logger.info("Created default personal workspace for new user", {
+              userId: data.id,
+              workspaceId: personal.id,
+            });
+          }
+        } catch (e) {
+          logger.error("Failed to ensure personal workspace for new user", e);
         }
 
         if (clerkClient) {

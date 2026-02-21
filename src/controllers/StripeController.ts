@@ -139,6 +139,123 @@ export async function createProCheckoutSession(
 }
 
 /**
+ * POST body: { credits: number, amountCents: number, workspaceId: string }
+ * Creates a Stripe Checkout Session for one-time Pro workspace credit top-up.
+ * Top-up credits valid 12 months from most recent purchase.
+ * Returns { url: string }.
+ */
+export async function createTopUpCheckoutSession(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  if (!stripe) {
+    res.status(503).json({ error: "Payments are not configured" });
+    return;
+  }
+
+  const body = req.body as {
+    credits?: number;
+    amountCents?: number;
+    workspaceId?: string;
+  };
+
+  const credits = typeof body.credits === "number" ? body.credits : 100;
+  const amountCents = typeof body.amountCents === "number" ? body.amountCents : 2500;
+  const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : undefined;
+
+  if (!workspaceId) {
+    res.status(400).json({ error: "workspaceId is required" });
+    return;
+  }
+
+  if (credits < 100 || credits > 10000 || amountCents < 2500 || amountCents > 225000) {
+    res.status(400).json({ error: "Invalid credits or amount" });
+    return;
+  }
+
+  const { ensureUserCanManageWorkspace } = await import("../services/workspaceService");
+  try {
+    await ensureUserCanManageWorkspace(userId!, workspaceId);
+  } catch {
+    res.status(403).json({ error: "Access denied to this workspace" });
+    return;
+  }
+
+  const ws = await WorkspaceModel.findById(workspaceId).select("planStatus").lean();
+  if (ws?.planStatus !== "pro") {
+    res.status(400).json({ error: "Workspace must be Pro to add top-up credits" });
+    return;
+  }
+
+  const appUrl = config.app.url.replace(/\/$/, "");
+  const successUrl = `${appUrl}/settings?tab=plans&checkout=success&workspaceId=${encodeURIComponent(workspaceId)}&topup=1`;
+  const cancelUrl = `${appUrl}/settings?tab=plans&checkout=cancelled&workspaceId=${encodeURIComponent(workspaceId)}`;
+
+  const user = await UserModel.findById(userId).select("email name stripeCustomerId").lean();
+  if (!user) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  let customerId: string | undefined = user.stripeCustomerId ?? undefined;
+  if (!customerId) {
+    const customer = await stripe.customers.create({
+      email: user.email ?? undefined,
+      name: user.name ?? undefined,
+      metadata: { userId },
+    });
+    customerId = customer.id;
+    await UserModel.findByIdAndUpdate(userId, { $set: { stripeCustomerId: customerId } });
+  }
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer: customerId,
+      client_reference_id: userId,
+      metadata: {
+        userId,
+        workspaceId,
+        type: "topup",
+        credits: String(credits),
+      },
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: `Credits top-up — ${credits.toLocaleString()} credits`,
+              description: "Valid for 12 months from your most recent purchase.",
+            },
+            unit_amount: amountCents,
+          },
+        },
+      ],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+
+    if (!session.url) {
+      res.status(500).json({ error: "Failed to create checkout session" });
+      return;
+    }
+
+    res.json({ url: session.url });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Top-up checkout failed";
+    res.status(500).json({ error: message });
+  }
+}
+
+/**
  * POST body: { flow?: "payment_method_update" | "invoices" }
  * Creates a Stripe Billing Portal session. Returns { url: string }.
  * Creates a Stripe Customer for the user if they don't have one (so Free users can open the portal too).
@@ -233,9 +350,39 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
     const session = event.data.object as Stripe.Checkout.Session;
     const userId = session.client_reference_id ?? session.metadata?.userId;
     const workspaceId = session.metadata?.workspaceId;
+    const isTopUp = session.metadata?.type === "topup";
 
     if (!userId) {
       logger.warn("Stripe webhook: checkout.session.completed missing userId");
+      res.status(200).send("OK");
+      return;
+    }
+
+    // One-time top-up for Pro workspace
+    if (isTopUp && workspaceId) {
+      const credits =
+        typeof session.metadata?.credits === "string"
+          ? parseInt(session.metadata.credits, 10)
+          : 100;
+      const safeCredits = Number.isFinite(credits) && credits > 0 ? credits : 100;
+      try {
+        const now = new Date();
+        const expiresAt = new Date(now);
+        expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1); // +12 months from purchase
+        await WorkspaceModel.findByIdAndUpdate(workspaceId, {
+          $inc: { topUpCreditsBalance: safeCredits },
+          $set: { topUpCreditsExpiresAt: expiresAt },
+        });
+        logger.info("Stripe webhook: workspace top-up added", {
+          workspaceId,
+          userId,
+          credits: safeCredits,
+        });
+      } catch (err) {
+        logger.error("Stripe webhook: failed to add top-up", { workspaceId, userId, err });
+        res.status(500).send("Internal error");
+        return;
+      }
       res.status(200).send("OK");
       return;
     }

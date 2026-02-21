@@ -45,10 +45,14 @@ export async function getCredits(
 ): Promise<CreditsInfo> {
   if (workspaceId) {
     const ws = await WorkspaceModel.findById(workspaceId)
-      .select("planStatus proCreditsPerMonth")
+      .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt")
       .lean();
     if (ws?.planStatus === "pro") {
-      return getWorkspaceCredits(workspaceId, ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT);
+      return getWorkspaceCredits(workspaceId, {
+        flexLimit: ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT,
+        topUpBalance: ws.topUpCreditsBalance ?? 0,
+        topUpExpiresAt: ws.topUpCreditsExpiresAt,
+      });
     }
   }
   return getUserCredits(userId);
@@ -101,11 +105,16 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
   };
 }
 
-/** Get workspace Pro credits (shared by all members). */
+/** Get workspace Pro credits (subscription + top-up, shared by all members). */
 async function getWorkspaceCredits(
   workspaceId: string,
-  flexLimit: number
+  opts: {
+    flexLimit: number;
+    topUpBalance?: number;
+    topUpExpiresAt?: Date | null;
+  }
 ): Promise<CreditsInfo> {
+  const { flexLimit, topUpBalance = 0, topUpExpiresAt } = opts;
   const month = getCurrentMonthString();
   const monthlyDoc = await WorkspaceMonthlyCreditsModel.findOne({
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
@@ -114,12 +123,18 @@ async function getWorkspaceCredits(
 
   const flexUsed = monthlyDoc?.flexCreditsUsed ?? 0;
   const flexRemaining = Math.max(0, flexLimit - flexUsed);
+  const now = new Date();
+  const topUpRemaining =
+    topUpExpiresAt && topUpExpiresAt > now && topUpBalance > 0
+      ? Math.max(0, topUpBalance)
+      : 0;
+  const remaining = flexRemaining + topUpRemaining;
   const limits = PLAN_LIMITS.pro;
   const usedThisMonth = flexUsed;
-  const limit = flexLimit + limits.creditsPerMonth;
+  const limit = flexLimit + limits.creditsPerMonth + topUpRemaining;
 
   return {
-    remaining: flexRemaining,
+    remaining,
     usedToday: 0,
     usedThisMonth,
     limit,
@@ -137,10 +152,14 @@ export async function deductCredits(
 
   if (workspaceId) {
     const ws = await WorkspaceModel.findById(workspaceId)
-      .select("planStatus proCreditsPerMonth")
+      .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt")
       .lean();
     if (ws?.planStatus === "pro") {
-      return deductWorkspaceCredits(workspaceId, amount, ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT);
+      return deductWorkspaceCredits(workspaceId, amount, {
+        flexLimit: ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT,
+        topUpBalance: ws.topUpCreditsBalance ?? 0,
+        topUpExpiresAt: ws.topUpCreditsExpiresAt,
+      });
     }
   }
 
@@ -210,13 +229,18 @@ export async function deductCredits(
   return getUserCredits(userId);
 }
 
-/** Deduct from workspace Pro credits pool. */
+/** Deduct from workspace Pro credits pool (top-up first, then subscription). */
 async function deductWorkspaceCredits(
   workspaceId: string,
   amount: number,
-  flexLimit: number
+  opts: {
+    flexLimit: number;
+    topUpBalance?: number;
+    topUpExpiresAt?: Date | null;
+  }
 ): Promise<CreditsInfo> {
-  const info = await getWorkspaceCredits(workspaceId, flexLimit);
+  const { flexLimit, topUpBalance = 0, topUpExpiresAt } = opts;
+  const info = await getWorkspaceCredits(workspaceId, opts);
   if (info.remaining < amount) {
     const err = new Error(
       `Insufficient credits. This workspace has ${info.remaining.toFixed(1)} credits remaining.`
@@ -224,16 +248,37 @@ async function deductWorkspaceCredits(
     err.code = "INSUFFICIENT_CREDITS";
     throw err;
   }
-  const month = getCurrentMonthString();
-  await WorkspaceMonthlyCreditsModel.findOneAndUpdate(
-    {
-      workspaceId: new mongoose.Types.ObjectId(workspaceId),
-      month,
-    },
-    { $inc: { flexCreditsUsed: amount } },
-    { new: true, upsert: true }
-  );
-  return getWorkspaceCredits(workspaceId, flexLimit);
+  const now = new Date();
+  const topUpRemaining =
+    topUpExpiresAt && topUpExpiresAt > now && topUpBalance > 0
+      ? Math.max(0, topUpBalance)
+      : 0;
+  const useTopUp = Math.min(amount, topUpRemaining);
+  const useFlex = amount - useTopUp;
+
+  const wsId = new mongoose.Types.ObjectId(workspaceId);
+  if (useTopUp > 0) {
+    await WorkspaceModel.findByIdAndUpdate(workspaceId, {
+      $inc: { topUpCreditsBalance: -useTopUp },
+    });
+  }
+  if (useFlex > 0) {
+    const month = getCurrentMonthString();
+    await WorkspaceMonthlyCreditsModel.findOneAndUpdate(
+      { workspaceId: wsId, month },
+      { $inc: { flexCreditsUsed: useFlex } },
+      { new: true, upsert: true }
+    );
+  }
+
+  const ws = await WorkspaceModel.findById(workspaceId)
+    .select("topUpCreditsBalance topUpCreditsExpiresAt")
+    .lean();
+  return getWorkspaceCredits(workspaceId, {
+    flexLimit,
+    topUpBalance: ws?.topUpCreditsBalance ?? 0,
+    topUpExpiresAt: ws?.topUpCreditsExpiresAt,
+  });
 }
 
 /** Check if user/workspace has at least `amount` credits. Throws if not. */

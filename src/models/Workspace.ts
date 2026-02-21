@@ -13,6 +13,10 @@ export interface WorkspaceDocument extends Document {
   stripeSubscriptionId?: string;
   /** Pro flex credits per month (from subscription). Used when planStatus is pro. */
   proCreditsPerMonth?: number;
+  /** One-time top-up credits balance (valid 12 months from most recent purchase). */
+  topUpCreditsBalance?: number;
+  /** Expiry of top-up credits (12 months from most recent purchase). */
+  topUpCreditsExpiresAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -41,6 +45,8 @@ const workspaceSchema = new Schema<WorkspaceDocument>(
     },
     stripeSubscriptionId: { type: String, trim: true, sparse: true },
     proCreditsPerMonth: { type: Number, default: undefined },
+    topUpCreditsBalance: { type: Number, default: 0 },
+    topUpCreditsExpiresAt: { type: Date, default: undefined },
   },
   { timestamps: true }
 );

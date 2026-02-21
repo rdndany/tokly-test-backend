@@ -9,6 +9,9 @@ import ProjectModel from "../models/Project";
 /** Per-user lock to prevent race: multiple concurrent calls creating duplicate default workspaces */
 const defaultWorkspaceCreationByUser = new Map<string, Promise<WorkspaceListItem>>();
 
+/** Per-user lock to prevent duplicate personal workspace creation */
+const personalWorkspaceCreationByUser = new Map<string, Promise<WorkspaceListItem | null>>();
+
 export interface WorkspaceListItem {
   id: string;
   name: string;
@@ -153,6 +156,59 @@ export async function getOrCreateDefaultWorkspace(
       }
     })();
     defaultWorkspaceCreationByUser.set(userId, promise);
+  }
+  return promise;
+}
+
+/** Ensure the user has a personal workspace (one they own). Creates "My Workspace" if none exists.
+ * Call after processing workspace invitations so invite-only users also get a default personal workspace. */
+export async function ensurePersonalWorkspace(
+  userId: string
+): Promise<WorkspaceListItem | null> {
+  let promise = personalWorkspaceCreationByUser.get(userId);
+  if (!promise) {
+    promise = (async () => {
+      try {
+        const owned = await WorkspaceMemberModel.findOne({
+          userId,
+          role: "owner",
+        }).lean();
+        if (owned) return null;
+
+        const workspace = await WorkspaceModel.create({
+          name: "My Workspace",
+          createdBy: userId,
+        });
+        await WorkspaceMemberModel.create({
+          workspaceId: workspace._id,
+          userId,
+          role: "owner",
+        });
+        await ProjectModel.updateMany(
+          { userId, workspaceId: { $exists: false } },
+          { $set: { workspaceId: workspace._id } }
+        );
+        await ProjectModel.updateMany(
+          { userId, workspaceId: null },
+          { $set: { workspaceId: workspace._id } }
+        );
+
+        return {
+          id: workspace._id.toString(),
+          name: workspace.name,
+          avatar: workspace.avatar,
+          createdBy: workspace.createdBy,
+          createdAt: workspace.createdAt,
+          updatedAt: workspace.updatedAt,
+          projectCount: 0,
+          role: "owner" as WorkspaceRole,
+          planStatus: (workspace.planStatus as WorkspacePlanStatus) ?? "free",
+        };
+      } finally {
+        personalWorkspaceCreationByUser.delete(userId);
+      }
+    })();
+    personalWorkspaceCreationByUser.set(userId, promise);
   }
   return promise;
 }
