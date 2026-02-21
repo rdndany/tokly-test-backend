@@ -705,8 +705,17 @@ export async function updateHideToklyBadge(
   await ensureUserCanEditProject(userId, project);
   const hideToklyBadge = input.hideToklyBadge === true;
   if (hideToklyBadge) {
-    const user = await UserModel.findById(userId).select("plan").lean();
-    if (user?.plan !== "pro") {
+    let hasPro = false;
+    const workspaceId = project.workspaceId?.toString();
+    if (workspaceId) {
+      const planStatus = await getWorkspacePlanStatus(workspaceId);
+      hasPro = planStatus === "pro";
+    }
+    if (!hasPro) {
+      const user = await UserModel.findById(userId).select("plan").lean();
+      hasPro = user?.plan === "pro";
+    }
+    if (!hasPro) {
       throw new Error("Pro plan required to hide the Tokly badge");
     }
   }
