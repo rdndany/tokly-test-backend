@@ -1,7 +1,13 @@
 import { Request, Response } from "express";
 import { createLogger } from "../utils/logger";
+import { createClerkClient } from "@clerk/clerk-sdk-node";
+import config from "../config";
 
 const logger = createLogger("UserController");
+const clerkClient = config.clerk.secretKey
+  ? createClerkClient({ secretKey: config.clerk.secretKey })
+  : null;
+
 import {
   getPublicProfileByHandle,
   follow as followService,
@@ -138,6 +144,29 @@ export async function getMyPreferences(req: Request, res: Response): Promise<voi
   } catch (error) {
     logger.error("Get my preferences error:", error);
     res.status(500).json({ error: "Failed to load preferences" });
+  }
+}
+
+/** Requires auth. Deletes the current user's account. Clerk webhook will cascade delete all user data. */
+export async function deleteAccount(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  if (!clerkClient) {
+    logger.error("Clerk client not configured");
+    res.status(500).json({ error: "Account deletion not available" });
+    return;
+  }
+  try {
+    await clerkClient.users.deleteUser(userId);
+    res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Delete account error:", error);
+    res.status(500).json({
+      error: error instanceof Error ? error.message : "Failed to delete account",
+    });
   }
 }
 
