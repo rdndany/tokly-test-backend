@@ -320,7 +320,7 @@ export async function updateProjectVisibility(
     return;
   }
   const projectVisibility =
-    req.body?.projectVisibility === "public" ? "public" : "workshop";
+    req.body?.projectVisibility === "public" ? "public" : "workspace";
   try {
     const project = await updateProjectVisibilityService(userId, projectId, {
       projectVisibility,

@@ -251,7 +251,7 @@ export async function getProjectById(projectId: string) {
       sectionOrder: project.sectionOrder,
       sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: project.hideToklyBadge,
-    projectVisibility: project.projectVisibility ?? "workshop",
+    projectVisibility: project.projectVisibility ?? "workspace",
     favicon: project.favicon,
     seoTitle: project.seoTitle,
     seoDescription: project.seoDescription,
@@ -335,12 +335,12 @@ export async function updateProjectCategory(
 export async function updateProjectVisibility(
   userId: string,
   projectId: string,
-  input: { projectVisibility: "public" | "workshop" }
+  input: { projectVisibility: "public" | "workspace" }
 ) {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
   await ensureUserCanEditProject(userId, project);
-  const projectVisibility = input.projectVisibility === "public" ? "public" : "workshop";
+  const projectVisibility = input.projectVisibility === "public" ? "public" : "workspace";
   await ProjectModel.updateOne(
     { _id: projectId },
     { $set: { projectVisibility } }
@@ -480,7 +480,7 @@ export async function getProjectByPublishUrl(
       sectionOrder: project.sectionOrder,
       sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: project.hideToklyBadge,
-    projectVisibility: project.projectVisibility ?? "workshop",
+    projectVisibility: project.projectVisibility ?? "workspace",
     favicon: project.favicon,
     seoTitle: project.seoTitle,
     seoDescription: project.seoDescription,
@@ -2226,7 +2226,7 @@ export async function listProjectsByUser(
       sectionOrder: p.sectionOrder,
       sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: p.hideToklyBadge,
-      projectVisibility: p.projectVisibility ?? "workshop",
+      projectVisibility: p.projectVisibility ?? "workspace",
       favicon: p.favicon,
       seoTitle: p.seoTitle,
       seoDescription: p.seoDescription,
@@ -2287,7 +2287,7 @@ export async function listProjectsByUser(
       sectionOrder: p.sectionOrder,
       sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: p.hideToklyBadge,
-      projectVisibility: p.projectVisibility ?? "workshop",
+      projectVisibility: p.projectVisibility ?? "workspace",
       favicon: p.favicon,
       seoTitle: p.seoTitle,
       seoDescription: p.seoDescription,
@@ -2353,7 +2353,7 @@ export async function listProjectsByUser(
     sectionOrder: p.sectionOrder,
     sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
     hideToklyBadge: p.hideToklyBadge,
-    projectVisibility: p.projectVisibility ?? "workshop",
+    projectVisibility: p.projectVisibility ?? "workspace",
     favicon: p.favicon,
     seoTitle: p.seoTitle,
     seoDescription: p.seoDescription,
