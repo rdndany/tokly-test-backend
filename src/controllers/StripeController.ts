@@ -401,11 +401,13 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
 
     try {
       if (workspaceId && subscriptionId) {
+        const interval = session.metadata?.interval === "year" ? "year" : "month";
         await WorkspaceModel.findByIdAndUpdate(workspaceId, {
           $set: {
             planStatus: "pro",
             proCreditsPerMonth: safeCredits,
             stripeSubscriptionId: subscriptionId,
+            stripeSubscriptionInterval: interval,
           },
         });
         logger.info("Stripe webhook: workspace upgraded to Pro", {
@@ -429,6 +431,30 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
       logger.error("Stripe webhook: failed to update plan", { userId, workspaceId, err });
       res.status(500).send("Internal error");
       return;
+    }
+  }
+
+  if (event.type === "customer.subscription.updated") {
+    const subscription = event.data.object as Stripe.Subscription;
+    const subscriptionId = subscription.id;
+    const interval = subscription.items?.data?.[0]?.plan?.interval;
+    const intervalValue = interval === "year" ? "year" : "month";
+    try {
+      const updated = await WorkspaceModel.findOneAndUpdate(
+        { stripeSubscriptionId: subscriptionId },
+        { $set: { stripeSubscriptionInterval: intervalValue } }
+      );
+      if (updated) {
+        logger.info("Stripe webhook: synced subscription interval", {
+          workspaceId: updated._id,
+          interval: intervalValue,
+        });
+      }
+    } catch (err) {
+      logger.error("Stripe webhook: failed to sync subscription interval", {
+        subscriptionId,
+        err,
+      });
     }
   }
 

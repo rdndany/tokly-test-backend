@@ -13,6 +13,8 @@ export interface WorkspaceDocument extends Document {
   stripeSubscriptionId?: string;
   /** Pro flex credits per month (from subscription). Used when planStatus is pro. */
   proCreditsPerMonth?: number;
+  /** Billing interval from Stripe subscription. Affects rollover: monthly = 1 month, annual = until end of year. */
+  stripeSubscriptionInterval?: "month" | "year";
   /** One-time top-up credits balance (valid 12 months from most recent purchase). */
   topUpCreditsBalance?: number;
   /** Expiry of top-up credits (12 months from most recent purchase). */
@@ -45,6 +47,7 @@ const workspaceSchema = new Schema<WorkspaceDocument>(
     },
     stripeSubscriptionId: { type: String, trim: true, sparse: true },
     proCreditsPerMonth: { type: Number, default: undefined },
+    stripeSubscriptionInterval: { type: String, enum: ["month", "year"], default: undefined },
     topUpCreditsBalance: { type: Number, default: 0 },
     topUpCreditsExpiresAt: { type: Date, default: undefined },
   },

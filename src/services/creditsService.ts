@@ -15,12 +15,33 @@ function getCurrentMonthString(): string {
   return new Date().toISOString().slice(0, 7); // YYYY-MM UTC
 }
 
+/** Period key for credits tracking. Monthly: YYYY-MM. Annual: YYYY. */
+function getPeriodKey(interval: "month" | "year", date: Date): string {
+  const iso = date.toISOString();
+  return interval === "year" ? iso.slice(0, 4) : iso.slice(0, 7);
+}
+
+/** Previous period key for rollover. */
+function getPreviousPeriodKey(interval: "month" | "year", periodKey: string): string {
+  if (interval === "year") {
+    const y = parseInt(periodKey, 10);
+    return String(y - 1);
+  }
+  const [y, m] = periodKey.split("-").map(Number);
+  if (m === 1) return `${y - 1}-12`;
+  return `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+
 export interface CreditsInfo {
   remaining: number;
   usedToday: number;
   usedThisMonth: number;
   limit: number;
   plan: PlanId;
+  /** Pro workspace/user: user's daily allowance remaining (5/day). Omitted or 0 when not applicable. */
+  dailyRemaining?: number;
+  /** Pro workspace/user: subscription + top-up credits remaining. Omitted or 0 when not applicable. */
+  proRemaining?: number;
 }
 
 /** Get current user's plan (default 'free' if user not found). */
@@ -45,13 +66,14 @@ export async function getCredits(
 ): Promise<CreditsInfo> {
   if (workspaceId) {
     const ws = await WorkspaceModel.findById(workspaceId)
-      .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt")
+      .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt stripeSubscriptionInterval")
       .lean();
     if (ws?.planStatus === "pro") {
-      return getWorkspaceCredits(workspaceId, {
+      return getWorkspaceCredits(workspaceId, userId, {
         flexLimit: ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT,
         topUpBalance: ws.topUpCreditsBalance ?? 0,
         topUpExpiresAt: ws.topUpCreditsExpiresAt,
+        interval: ws.stripeSubscriptionInterval ?? "month",
       });
     }
   }
@@ -70,7 +92,6 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
 
   const usedToday = dailyDoc?.creditsUsed ?? 0;
   const usedBaseMonth = monthlyDoc?.creditsUsed ?? 0;
-  const flexUsed = monthlyDoc?.flexCreditsUsed ?? 0;
 
   if (plan === "free") {
     const limits = PLAN_LIMITS.free;
@@ -83,18 +104,42 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
       usedThisMonth: usedBaseMonth,
       limit: limits.creditsPerMonth,
       plan,
+      dailyRemaining: remaining,
+      proRemaining: 0,
     };
   }
 
   const flexLimit = await getProFlexLimit(userId);
   const limits = PLAN_LIMITS.pro;
-  const flexRemaining = Math.max(0, flexLimit - flexUsed);
+  const interval: "month" | "year" = "month";
+  const now = new Date();
+  const periodKey = getPeriodKey(interval, now);
+  let monthlyDocForFlex = await UserMonthlyCreditsModel.findOne({ userId, month: periodKey }).lean();
+  if (!monthlyDocForFlex) {
+    const prevPeriodKey = getPreviousPeriodKey(interval, periodKey);
+    const prevDoc = await UserMonthlyCreditsModel.findOne({ userId, month: prevPeriodKey }).lean();
+    const prevFlexUsed = prevDoc?.flexCreditsUsed ?? 0;
+    const prevRollover = prevDoc?.flexCreditsRollover ?? 0;
+    const prevLimit = flexLimit + prevRollover;
+    const prevUnused = Math.max(0, prevLimit - prevFlexUsed);
+    const rollover = Math.min(prevUnused, flexLimit);
+    await UserMonthlyCreditsModel.findOneAndUpdate(
+      { userId, month: periodKey },
+      { $setOnInsert: { creditsUsed: 0, flexCreditsUsed: 0, flexCreditsRollover: rollover } },
+      { upsert: true }
+    );
+    monthlyDocForFlex = await UserMonthlyCreditsModel.findOne({ userId, month: periodKey }).lean();
+  }
+  const flexRollover = monthlyDocForFlex?.flexCreditsRollover ?? 0;
+  const effectiveFlexLimit = flexLimit + flexRollover;
+  const flexUsedPro = monthlyDocForFlex?.flexCreditsUsed ?? monthlyDoc?.flexCreditsUsed ?? 0;
+  const flexRemaining = Math.max(0, effectiveFlexLimit - flexUsedPro);
   const baseDailyRemaining = Math.max(0, limits.creditsPerDay - usedToday);
   const baseMonthlyRemaining = Math.max(0, limits.creditsPerMonth - usedBaseMonth);
   const baseRemaining = Math.min(baseDailyRemaining, baseMonthlyRemaining);
   const remaining = flexRemaining + baseRemaining;
-  const usedThisMonth = flexUsed + usedBaseMonth;
-  const limit = flexLimit + limits.creditsPerMonth;
+  const usedThisMonth = flexUsedPro + usedBaseMonth;
+  const limit = effectiveFlexLimit + limits.creditsPerMonth;
 
   return {
     remaining,
@@ -102,43 +147,92 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
     usedThisMonth,
     limit,
     plan,
+    dailyRemaining: baseRemaining,
+    proRemaining: flexRemaining,
   };
 }
 
-/** Get workspace Pro credits (subscription + top-up, shared by all members). */
+/** Get workspace Pro credits (subscription + top-up + user's daily allowance). Supports rollover. */
 async function getWorkspaceCredits(
   workspaceId: string,
+  userId: string,
   opts: {
     flexLimit: number;
     topUpBalance?: number;
     topUpExpiresAt?: Date | null;
+    interval?: "month" | "year";
   }
 ): Promise<CreditsInfo> {
-  const { flexLimit, topUpBalance = 0, topUpExpiresAt } = opts;
+  const { flexLimit, topUpBalance = 0, topUpExpiresAt, interval = "month" } = opts;
+  const now = new Date();
+  const date = getTodayDateString();
   const month = getCurrentMonthString();
-  const monthlyDoc = await WorkspaceMonthlyCreditsModel.findOne({
+  const periodKey = getPeriodKey(interval, now);
+
+  let monthlyDoc = await WorkspaceMonthlyCreditsModel.findOne({
     workspaceId: new mongoose.Types.ObjectId(workspaceId),
-    month,
+    month: periodKey,
   }).lean();
 
-  const flexUsed = monthlyDoc?.flexCreditsUsed ?? 0;
-  const flexRemaining = Math.max(0, flexLimit - flexUsed);
-  const now = new Date();
+  if (!monthlyDoc) {
+    const prevPeriodKey = getPreviousPeriodKey(interval, periodKey);
+    const prevDoc = await WorkspaceMonthlyCreditsModel.findOne({
+      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+      month: prevPeriodKey,
+    }).lean();
+    const prevFlexUsed = prevDoc?.flexCreditsUsed ?? 0;
+    const prevLimit = flexLimit + (prevDoc?.flexCreditsRollover ?? 0);
+    const prevUnused = Math.max(0, prevLimit - prevFlexUsed);
+    const rollover = interval === "month"
+      ? Math.min(prevUnused, flexLimit)
+      : prevUnused;
+    const wsId = new mongoose.Types.ObjectId(workspaceId);
+    await WorkspaceMonthlyCreditsModel.findOneAndUpdate(
+      { workspaceId: wsId, month: periodKey },
+      { $setOnInsert: { creditsUsed: 0, flexCreditsUsed: 0, flexCreditsRollover: rollover } },
+      { upsert: true }
+    );
+    const refetched = await WorkspaceMonthlyCreditsModel.findOne({
+      workspaceId: wsId,
+      month: periodKey,
+    }).lean();
+    monthlyDoc = refetched ?? ({ flexCreditsUsed: 0, flexCreditsRollover: rollover } as unknown as NonNullable<typeof monthlyDoc>);
+  }
+
+  const doc = monthlyDoc!;
+  const flexRollover = doc.flexCreditsRollover ?? 0;
+  const effectiveFlexLimit = flexLimit + flexRollover;
+  const flexUsed = doc.flexCreditsUsed ?? 0;
+  const flexRemaining = Math.max(0, effectiveFlexLimit - flexUsed);
   const topUpRemaining =
     topUpExpiresAt && topUpExpiresAt > now && topUpBalance > 0
       ? Math.max(0, topUpBalance)
       : 0;
-  const remaining = flexRemaining + topUpRemaining;
+
+  const [dailyDoc, monthlyUserDoc] = await Promise.all([
+    UserDailyCreditsModel.findOne({ userId, date }).lean(),
+    UserMonthlyCreditsModel.findOne({ userId, month }).lean(),
+  ]);
   const limits = PLAN_LIMITS.pro;
+  const usedToday = dailyDoc?.creditsUsed ?? 0;
+  const usedBaseMonth = monthlyUserDoc?.creditsUsed ?? 0;
+  const baseDailyRemaining = Math.max(0, limits.creditsPerDay - usedToday);
+  const baseMonthlyRemaining = Math.max(0, limits.creditsPerMonth - usedBaseMonth);
+  const baseRemaining = Math.min(baseDailyRemaining, baseMonthlyRemaining);
+
+  const remaining = flexRemaining + topUpRemaining + baseRemaining;
   const usedThisMonth = flexUsed;
-  const limit = flexLimit + limits.creditsPerMonth + topUpRemaining;
+  const limit = effectiveFlexLimit + limits.creditsPerMonth + topUpRemaining;
+  const proRemaining = flexRemaining + topUpRemaining;
 
   return {
     remaining,
-    usedToday: 0,
+    usedToday,
     usedThisMonth,
     limit,
     plan: "pro",
+    dailyRemaining: baseRemaining,
+    proRemaining,
   };
 }
 
@@ -152,13 +246,14 @@ export async function deductCredits(
 
   if (workspaceId) {
     const ws = await WorkspaceModel.findById(workspaceId)
-      .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt")
+      .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt stripeSubscriptionInterval")
       .lean();
     if (ws?.planStatus === "pro") {
-      return deductWorkspaceCredits(workspaceId, amount, {
+      return deductWorkspaceCredits(workspaceId, userId, amount, {
         flexLimit: ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT,
         topUpBalance: ws.topUpCreditsBalance ?? 0,
         topUpExpiresAt: ws.topUpCreditsExpiresAt,
+        interval: ws.stripeSubscriptionInterval ?? "month",
       });
     }
   }
@@ -229,18 +324,20 @@ export async function deductCredits(
   return getUserCredits(userId);
 }
 
-/** Deduct from workspace Pro credits pool (top-up first, then subscription). */
+/** Deduct from workspace Pro credits pool (user daily first, then top-up, then subscription). */
 async function deductWorkspaceCredits(
   workspaceId: string,
+  userId: string,
   amount: number,
   opts: {
     flexLimit: number;
     topUpBalance?: number;
     topUpExpiresAt?: Date | null;
+    interval?: "month" | "year";
   }
 ): Promise<CreditsInfo> {
-  const { flexLimit, topUpBalance = 0, topUpExpiresAt } = opts;
-  const info = await getWorkspaceCredits(workspaceId, opts);
+  const { flexLimit, topUpBalance = 0, topUpExpiresAt, interval = "month" } = opts;
+  const info = await getWorkspaceCredits(workspaceId, userId, opts);
   if (info.remaining < amount) {
     const err = new Error(
       `Insufficient credits. This workspace has ${info.remaining.toFixed(1)} credits remaining.`
@@ -248,36 +345,72 @@ async function deductWorkspaceCredits(
     err.code = "INSUFFICIENT_CREDITS";
     throw err;
   }
-  const now = new Date();
-  const topUpRemaining =
-    topUpExpiresAt && topUpExpiresAt > now && topUpBalance > 0
-      ? Math.max(0, topUpBalance)
-      : 0;
-  const useTopUp = Math.min(amount, topUpRemaining);
-  const useFlex = amount - useTopUp;
 
-  const wsId = new mongoose.Types.ObjectId(workspaceId);
-  if (useTopUp > 0) {
-    await WorkspaceModel.findByIdAndUpdate(workspaceId, {
-      $inc: { topUpCreditsBalance: -useTopUp },
-    });
+  const date = getTodayDateString();
+  const month = getCurrentMonthString();
+  const limits = PLAN_LIMITS.pro;
+
+  const [dailyDoc, monthlyUserDoc] = await Promise.all([
+    UserDailyCreditsModel.findOne({ userId, date }).lean(),
+    UserMonthlyCreditsModel.findOne({ userId, month }).lean(),
+  ]);
+  const usedToday = dailyDoc?.creditsUsed ?? 0;
+  const usedBaseMonth = monthlyUserDoc?.creditsUsed ?? 0;
+  const baseDailyRemaining = Math.max(0, limits.creditsPerDay - usedToday);
+  const baseMonthlyRemaining = Math.max(0, limits.creditsPerMonth - usedBaseMonth);
+  const baseRemaining = Math.min(baseDailyRemaining, baseMonthlyRemaining);
+
+  const useBase = Math.min(amount, baseRemaining);
+  const useWorkspace = amount - useBase;
+
+  if (useBase > 0) {
+    await Promise.all([
+      UserDailyCreditsModel.findOneAndUpdate(
+        { userId, date },
+        { $inc: { creditsUsed: useBase } },
+        { new: true, upsert: true }
+      ),
+      UserMonthlyCreditsModel.findOneAndUpdate(
+        { userId, month },
+        { $inc: { creditsUsed: useBase } },
+        { new: true, upsert: true }
+      ),
+    ]);
   }
-  if (useFlex > 0) {
-    const month = getCurrentMonthString();
-    await WorkspaceMonthlyCreditsModel.findOneAndUpdate(
-      { workspaceId: wsId, month },
-      { $inc: { flexCreditsUsed: useFlex } },
-      { new: true, upsert: true }
-    );
+
+  if (useWorkspace > 0) {
+    const now = new Date();
+    const topUpRemaining =
+      topUpExpiresAt && topUpExpiresAt > now && topUpBalance > 0
+        ? Math.max(0, topUpBalance)
+        : 0;
+    const useTopUp = Math.min(useWorkspace, topUpRemaining);
+    const useFlex = useWorkspace - useTopUp;
+
+    const wsId = new mongoose.Types.ObjectId(workspaceId);
+    if (useTopUp > 0) {
+      await WorkspaceModel.findByIdAndUpdate(workspaceId, {
+        $inc: { topUpCreditsBalance: -useTopUp },
+      });
+    }
+    if (useFlex > 0) {
+      const periodKey = getPeriodKey(interval, new Date());
+      await WorkspaceMonthlyCreditsModel.findOneAndUpdate(
+        { workspaceId: wsId, month: periodKey },
+        { $inc: { flexCreditsUsed: useFlex } },
+        { new: true, upsert: true }
+      );
+    }
   }
 
   const ws = await WorkspaceModel.findById(workspaceId)
-    .select("topUpCreditsBalance topUpCreditsExpiresAt")
+    .select("topUpCreditsBalance topUpCreditsExpiresAt stripeSubscriptionInterval")
     .lean();
-  return getWorkspaceCredits(workspaceId, {
+  return getWorkspaceCredits(workspaceId, userId, {
     flexLimit,
     topUpBalance: ws?.topUpCreditsBalance ?? 0,
     topUpExpiresAt: ws?.topUpCreditsExpiresAt,
+    interval: ws?.stripeSubscriptionInterval ?? "month",
   });
 }
 
