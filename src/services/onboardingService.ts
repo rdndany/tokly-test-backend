@@ -100,6 +100,15 @@ export async function completeOnboarding(
   if (handle !== undefined) update.handle = handle;
   if (autoAcceptInvitations !== undefined) update.autoAcceptInvitations = autoAcceptInvitations;
 
+  // If display name is still the Clerk user id (e.g. "user_3A7L..."), set name to fullName (from payload or existing)
+  const current = await UserModel.findById(userId).select("name fullName").lean();
+  const currentName = current?.name as string | undefined;
+  const currentFullName = (current?.fullName as string | undefined)?.trim();
+  if (typeof currentName === "string" && currentName.startsWith("user_")) {
+    const nameToUse = (typeof fullName === "string" && fullName.trim()) ? fullName.trim() : currentFullName;
+    if (nameToUse) update.name = nameToUse;
+  }
+
   await UserModel.findByIdAndUpdate(userId, update);
 
   if (clerkClient) {

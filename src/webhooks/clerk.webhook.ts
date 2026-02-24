@@ -134,9 +134,18 @@ export const clerkWebhooks: RequestHandler = async (
       }
 
       case "user.updated": {
+        const clerkName = getName(data);
+        const existing = await UserModel.findById(data.id).select("name fullName").lean();
+        const existingFullName = (existing?.fullName as string | undefined)?.trim();
+        const existingName = existing?.name as string | undefined;
+        const hasRealName = existingFullName || (existingName && !existingName.startsWith("user_"));
+        const name =
+          typeof clerkName === "string" && clerkName.startsWith("user_") && hasRealName
+            ? (existingFullName || existingName || clerkName)
+            : clerkName;
         const userData: Partial<UserDocument> = {
           email: getEmail(data) ?? undefined,
-          name: getName(data),
+          name,
           image: data.image_url ?? undefined,
           updatedAt: getNow(),
         };
