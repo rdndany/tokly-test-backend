@@ -23,6 +23,8 @@ export interface UserDocument extends Omit<Document, "_id"> {
   stripeCustomerId?: string;
   /** Unique affiliate/referral code for this user. */
   affiliateCode?: string;
+  /** Solana wallet address for affiliate commission withdrawals. */
+  solanaWallet?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -98,6 +100,7 @@ const userSchema = new Schema<UserDocument>({
     sparse: true,
     unique: true,
   },
+  solanaWallet: { type: String, trim: true },
   createdAt: {
     type: Date,
     required: true,

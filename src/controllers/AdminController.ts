@@ -253,3 +253,61 @@ export async function getAllReferralUsersHandler(req: Request, res: Response): P
     });
   }
 }
+
+export async function getAllWithdrawalRequestsHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const page = req.query.page ? parseInt(String(req.query.page), 10) : 1;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : 20;
+    const status = (req.query.status as string) || undefined;
+    const search = (req.query.search as string) || undefined;
+    const result = await AdminService.getAllWithdrawalRequests(page, limit, status, search);
+    res.status(HTTPSTATUS.OK).json({ success: true, ...result });
+  } catch (error) {
+    logger.error("Error fetching withdrawal requests", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to fetch withdrawal requests" });
+  }
+}
+
+export async function approveWithdrawalRequestHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const adminUserId = req.auth?.userId;
+    if (!adminUserId) {
+      res.status(HTTPSTATUS.UNAUTHORIZED).json({ message: "Unauthorized" });
+      return;
+    }
+    const requestId = req.params.requestId;
+    const { transactionHash, adminNotes } = req.body as { transactionHash?: string; adminNotes?: string };
+    if (!requestId || !transactionHash?.trim()) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "requestId and transactionHash are required" });
+      return;
+    }
+    const request = await AdminService.approveWithdrawalRequest(requestId, adminUserId, transactionHash.trim(), adminNotes);
+    res.status(HTTPSTATUS.OK).json({ success: true, message: "Withdrawal request approved", request });
+  } catch (error) {
+    logger.error("Error approving withdrawal request", error);
+    const message = error instanceof Error ? error.message : "Failed to approve withdrawal request";
+    res.status(HTTPSTATUS.BAD_REQUEST).json({ message });
+  }
+}
+
+export async function rejectWithdrawalRequestHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const adminUserId = req.auth?.userId;
+    if (!adminUserId) {
+      res.status(HTTPSTATUS.UNAUTHORIZED).json({ message: "Unauthorized" });
+      return;
+    }
+    const requestId = req.params.requestId;
+    const { adminNotes } = req.body as { adminNotes?: string };
+    if (!requestId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "requestId is required" });
+      return;
+    }
+    const request = await AdminService.rejectWithdrawalRequest(requestId, adminUserId, adminNotes);
+    res.status(HTTPSTATUS.OK).json({ success: true, message: "Withdrawal request rejected", request });
+  } catch (error) {
+    logger.error("Error rejecting withdrawal request", error);
+    const message = error instanceof Error ? error.message : "Failed to reject withdrawal request";
+    res.status(HTTPSTATUS.BAD_REQUEST).json({ message });
+  }
+}

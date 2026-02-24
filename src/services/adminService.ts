@@ -5,6 +5,7 @@ import ProjectFolderModel from "../models/ProjectFolder";
 import PaymentModel from "../models/Payment";
 import WorkspaceModel from "../models/Workspace";
 import ReferralModel from "../models/Referral";
+import WithdrawalRequestModel from "../models/WithdrawalRequest";
 import WorkspaceMemberModel from "../models/WorkspaceMember";
 import { clerkClient } from "@clerk/express";
 import { deleteUserData } from "./deleteUserDataService";
@@ -1071,6 +1072,7 @@ export interface AdminReferralUser {
     _id: string;
     firstName?: string;
     lastName?: string;
+    image?: string;
     emailAddresses: Array<{ emailAddress: string }>;
   };
 }
@@ -1102,7 +1104,7 @@ export async function getAllReferralUsers(
 
   const total = await UserModel.countDocuments(filter);
   const users = await UserModel.find(filter)
-    .select("_id name email affiliateCode createdAt")
+    .select("_id name email image affiliateCode createdAt")
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(limit)
@@ -1140,6 +1142,7 @@ export async function getAllReferralUsers(
           _id: u._id,
           firstName: (u as { name?: string }).name ?? undefined,
           lastName: undefined,
+          image: (u as { image?: string }).image ?? undefined,
           emailAddresses: (u as { email?: string }).email ? [{ emailAddress: (u as { email: string }).email }] : [],
         },
       };
@@ -1150,5 +1153,156 @@ export async function getAllReferralUsers(
   return {
     users: usersWithStats,
     pagination: { page, limit, total, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
+  };
+}
+
+export interface AdminWithdrawalRequestResult {
+  _id: string;
+  userId: string;
+  amount: number;
+  solanaWallet: string;
+  status: string;
+  transactionHash?: string;
+  adminNotes?: string;
+  processedBy?: string;
+  processedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  user?: {
+    _id: string;
+    firstName?: string;
+    emailAddresses: Array<{ emailAddress: string }>;
+    affiliateCode?: string;
+  };
+}
+
+export async function getAllWithdrawalRequests(
+  page: number = 1,
+  limit: number = 20,
+  status?: string,
+  search?: string
+): Promise<{
+  requests: AdminWithdrawalRequestResult[];
+  pagination: { page: number; limit: number; total: number; totalPages: number; hasNext: boolean; hasPrev: boolean };
+}> {
+  const skip = (page - 1) * limit;
+  const query: Record<string, unknown> = {};
+  if (status && status !== "all") query.status = status;
+  if (search?.trim()) {
+    query.$or = [
+      { solanaWallet: new RegExp(search.trim(), "i") },
+      { transactionHash: new RegExp(search.trim(), "i") },
+      { adminNotes: new RegExp(search.trim(), "i") },
+    ];
+  }
+  const total = await WithdrawalRequestModel.countDocuments(query);
+  const list = await WithdrawalRequestModel.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();
+  const requests: AdminWithdrawalRequestResult[] = await Promise.all(
+    list.map(async (r: unknown) => {
+      const row = r as { _id: unknown; userId: string; amount: number; solanaWallet: string; status: string; transactionHash?: string; adminNotes?: string; processedBy?: string; processedAt?: Date; createdAt: Date; updatedAt: Date };
+      const user = await UserModel.findById(row.userId).select("_id name email affiliateCode").lean();
+      return {
+        _id: String(row._id),
+        userId: row.userId,
+        amount: row.amount,
+        solanaWallet: row.solanaWallet,
+        status: row.status,
+        transactionHash: row.transactionHash,
+        adminNotes: row.adminNotes,
+        processedBy: row.processedBy,
+        processedAt: row.processedAt,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        user: user
+          ? {
+              _id: String((user as { _id: string })._id),
+              firstName: (user as { name?: string }).name,
+              emailAddresses: (user as { email?: string }).email ? [{ emailAddress: (user as { email: string }).email }] : [],
+              affiliateCode: (user as { affiliateCode?: string }).affiliateCode,
+            }
+          : undefined,
+      };
+    })
+  );
+  const totalPages = Math.ceil(total / limit);
+  return {
+    requests,
+    pagination: { page, limit, total, totalPages, hasNext: page < totalPages, hasPrev: page > 1 },
+  };
+}
+
+export async function approveWithdrawalRequest(
+  requestId: string,
+  adminUserId: string,
+  transactionHash: string,
+  adminNotes?: string
+): Promise<AdminWithdrawalRequestResult> {
+  const doc = await WithdrawalRequestModel.findById(requestId);
+  if (!doc) throw new Error("Withdrawal request not found");
+  if (doc.status !== "pending") throw new Error("Withdrawal request is not pending");
+  doc.status = "completed";
+  doc.transactionHash = transactionHash.trim();
+  doc.processedBy = adminUserId;
+  doc.processedAt = new Date();
+  if (adminNotes?.trim()) doc.adminNotes = adminNotes.trim();
+  await doc.save();
+  const user = await UserModel.findById(doc.userId).select("_id name email affiliateCode").lean();
+  return {
+    _id: String(doc._id),
+    userId: doc.userId,
+    amount: doc.amount,
+    solanaWallet: doc.solanaWallet,
+    status: doc.status,
+    transactionHash: doc.transactionHash,
+    adminNotes: doc.adminNotes,
+    processedBy: doc.processedBy,
+    processedAt: doc.processedAt,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    user: user
+      ? {
+          _id: String((user as { _id: string })._id),
+          firstName: (user as { name?: string }).name,
+          emailAddresses: (user as { email?: string }).email ? [{ emailAddress: (user as { email: string }).email }] : [],
+          affiliateCode: (user as { affiliateCode?: string }).affiliateCode,
+        }
+      : undefined,
+  };
+}
+
+export async function rejectWithdrawalRequest(
+  requestId: string,
+  adminUserId: string,
+  adminNotes?: string
+): Promise<AdminWithdrawalRequestResult> {
+  const doc = await WithdrawalRequestModel.findById(requestId);
+  if (!doc) throw new Error("Withdrawal request not found");
+  if (doc.status !== "pending") throw new Error("Withdrawal request is not pending");
+  doc.status = "failed";
+  doc.processedBy = adminUserId;
+  doc.processedAt = new Date();
+  if (adminNotes?.trim()) doc.adminNotes = adminNotes.trim();
+  await doc.save();
+  const user = await UserModel.findById(doc.userId).select("_id name email affiliateCode").lean();
+  return {
+    _id: String(doc._id),
+    userId: doc.userId,
+    amount: doc.amount,
+    solanaWallet: doc.solanaWallet,
+    status: doc.status,
+    transactionHash: doc.transactionHash,
+    adminNotes: doc.adminNotes,
+    processedBy: doc.processedBy,
+    processedAt: doc.processedAt,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    user: user
+      ? {
+          _id: String((user as { _id: string })._id),
+          firstName: (user as { name?: string }).name,
+          emailAddresses: (user as { email?: string }).email ? [{ emailAddress: (user as { email: string }).email }] : [],
+          affiliateCode: (user as { affiliateCode?: string }).affiliateCode,
+        }
+      : undefined,
   };
 }

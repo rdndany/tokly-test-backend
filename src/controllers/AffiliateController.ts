@@ -104,3 +104,87 @@ export async function getReferralPayments(req: Request, res: Response): Promise<
     res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get referral payments" });
   }
 }
+
+export async function getSolanaWallet(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = getUserId(req);
+    const wallet = await AffiliateService.getSolanaWallet(userId);
+    res.status(HTTPSTATUS.OK).json({ success: true, solanaWallet: wallet });
+  } catch (err) {
+    logger.error("Error getting Solana wallet", err);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get wallet" });
+  }
+}
+
+export async function updateSolanaWallet(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = getUserId(req);
+    const { solanaWallet } = req.body as { solanaWallet?: string };
+    if (typeof solanaWallet !== "string") {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "solanaWallet is required" });
+      return;
+    }
+    await AffiliateService.updateSolanaWallet(userId, solanaWallet);
+    res.status(HTTPSTATUS.OK).json({ success: true });
+  } catch (err) {
+    logger.error("Error updating Solana wallet", err);
+    const message = err instanceof Error ? err.message : "Failed to update wallet";
+    res.status(HTTPSTATUS.BAD_REQUEST).json({ message });
+  }
+}
+
+export async function getWithdrawalRequests(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = getUserId(req);
+    const requests = await AffiliateService.getWithdrawalRequests(userId);
+    res.status(HTTPSTATUS.OK).json({ success: true, withdrawalRequests: requests });
+  } catch (err) {
+    logger.error("Error getting withdrawal requests", err);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get withdrawal requests" });
+  }
+}
+
+export async function getWithdrawalStats(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = getUserId(req);
+    const stats = await AffiliateService.getWithdrawalStats(userId);
+    res.status(HTTPSTATUS.OK).json({ success: true, withdrawalStats: stats });
+  } catch (err) {
+    logger.error("Error getting withdrawal stats", err);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get withdrawal stats" });
+  }
+}
+
+export async function createWithdrawalRequest(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = getUserId(req);
+    const { amount, solanaWallet } = req.body as { amount?: number; solanaWallet?: string };
+    if (typeof amount !== "number" || typeof solanaWallet !== "string") {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "amount and solanaWallet are required" });
+      return;
+    }
+    const request = await AffiliateService.createWithdrawalRequest(userId, amount, solanaWallet);
+    res.status(HTTPSTATUS.OK).json({ success: true, withdrawalRequest: request });
+  } catch (err) {
+    logger.error("Error creating withdrawal request", err);
+    const message = err instanceof Error ? err.message : "Failed to create withdrawal request";
+    res.status(HTTPSTATUS.BAD_REQUEST).json({ message });
+  }
+}
+
+export async function cancelWithdrawalRequest(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = getUserId(req);
+    const requestId = req.params.requestId;
+    if (!requestId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "requestId is required" });
+      return;
+    }
+    await AffiliateService.cancelWithdrawalRequest(requestId, userId);
+    res.status(HTTPSTATUS.OK).json({ success: true });
+  } catch (err) {
+    logger.error("Error cancelling withdrawal request", err);
+    const message = err instanceof Error ? err.message : "Failed to cancel withdrawal request";
+    res.status(HTTPSTATUS.BAD_REQUEST).json({ message });
+  }
+}
