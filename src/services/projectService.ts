@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import OpenAI from "openai";
 import { v4 as uuidv4 } from "uuid";
 import config from "../config";
+import { clerkClient } from "@clerk/express";
 import ProjectModel from "../models/Project";
 import UserModel from "../models/User";
 import StarredProjectModel from "../models/StarredProject";
@@ -11,6 +12,7 @@ import ProjectFileModel from "../models/ProjectFile";
 import { extractLexicalText, plainTextToLexicalJSON } from "../utils/lexicalHelpers";
 import { getDexUrlForBlockchain, extractTokenAddressFromDexUrl } from "../utils/dexUtils";
 import { fetchTokenDetails } from "./mobulaService";
+import { addTokenUpdateLog } from "./tokenUpdateLogService";
 import { buildTokenBrief } from "../utils/tokenBrief";
 import type {
   ListingPlatformEntry,
@@ -33,6 +35,17 @@ export async function ensureUserCanEditProject(
   userId: string,
   project: { userId: string; workspaceId?: { toString(): string } }
 ): Promise<void> {
+  const userDoc = await UserModel.findById(userId).select("role").lean();
+  if (userDoc?.role === "admin") return;
+  if (clerkClient) {
+    try {
+      const clerkUser = await clerkClient.users.getUser(userId);
+      if (clerkUser.publicMetadata?.role === "admin") return;
+    } catch {
+      // Ignore Clerk lookup errors; continue with workspace check
+    }
+  }
+
   const workspaceId = project.workspaceId?.toString();
   if (workspaceId) {
     const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
@@ -898,6 +911,164 @@ Write a brief, friendly 1-2 sentence comment acknowledging the update.`
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
   };
+}
+
+/**
+ * Merge Mobula token data (price, market_cap, etc.) into existing tokenDetails.
+ * Preserves dexUrl, tokenFeatures, launchType, launchPlatformUrl, and user overrides.
+ */
+function mergeTokenDetailsFromMobula(
+  existing: Record<string, unknown> | undefined,
+  fetched: { price?: number; market_cap?: number; market_cap_diluted?: number; volume?: number; volume_change_24h?: number | null; volume_7d?: number | null; liquidity?: number; price_change_24h?: number; total_supply?: number; circulating_supply?: number; name?: string; symbol?: string; logo?: string; decimals?: number }
+): Record<string, unknown> {
+  const base = { ...(existing ?? {}) };
+  if (fetched.price !== undefined) base.price = fetched.price;
+  if (fetched.market_cap !== undefined) base.market_cap = fetched.market_cap;
+  if (fetched.market_cap_diluted !== undefined) base.market_cap_diluted = fetched.market_cap_diluted;
+  if (fetched.volume !== undefined) base.volume = fetched.volume;
+  if (fetched.volume_change_24h !== undefined) base.volume_change_24h = fetched.volume_change_24h;
+  if (fetched.volume_7d !== undefined) base.volume_7d = fetched.volume_7d;
+  if (fetched.liquidity !== undefined) base.liquidity = fetched.liquidity;
+  if (fetched.price_change_24h !== undefined) base.price_change_24h = fetched.price_change_24h;
+  if (fetched.total_supply !== undefined) base.total_supply = fetched.total_supply;
+  if (fetched.circulating_supply !== undefined) base.circulating_supply = fetched.circulating_supply;
+  if (fetched.name !== undefined) base.name = fetched.name;
+  if (fetched.symbol !== undefined) base.symbol = fetched.symbol;
+  if (fetched.logo !== undefined) base.logo = fetched.logo;
+  if (fetched.decimals !== undefined) base.decimals = fetched.decimals;
+  return base;
+}
+
+/**
+ * Update token price/marketCap/etc for all projects that have tokenDetails.address and tokenDetails.chain.
+ * Used by cron every 5 minutes. Logs each update to tokenUpdateLogService.
+ */
+export async function updateAllProjectsTokenData(): Promise<void> {
+  const projects = await ProjectModel.find({
+    "tokenDetails.address": { $exists: true, $ne: "" },
+    "tokenDetails.chain": { $exists: true, $ne: "" },
+  })
+    .select("_id title tokenDetails")
+    .lean();
+
+  for (const p of projects) {
+    const projectId = p._id.toString();
+    const projectName = (p.title ?? "").trim() || `Project ${projectId.slice(0, 8)}`;
+    const address = (p.tokenDetails?.address ?? "").toString().trim();
+    const chain = (p.tokenDetails?.chain ?? "").toString().trim();
+    if (!address || !chain) continue;
+
+    try {
+      const fetched = await fetchTokenDetails(address, chain);
+      if (!fetched) {
+        addTokenUpdateLog({
+          source: "cron",
+          projectId,
+          projectName,
+          contractAddress: address,
+          tokenDetails: null,
+          success: false,
+          error: "Failed to fetch token from Mobula",
+        });
+        continue;
+      }
+      const merged = mergeTokenDetailsFromMobula(p.tokenDetails as Record<string, unknown> | undefined, fetched);
+      await ProjectModel.updateOne(
+        { _id: p._id },
+        { $set: { tokenDetails: merged } }
+      );
+      const updated = await ProjectModel.findById(p._id).select("tokenDetails").lean();
+      addTokenUpdateLog({
+        source: "cron",
+        projectId,
+        projectName,
+        contractAddress: address,
+        tokenDetails: (updated?.tokenDetails ?? merged) as import("../types/tokenDetails").TokenDetails,
+        success: true,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      addTokenUpdateLog({
+        source: "cron",
+        projectId,
+        projectName,
+        contractAddress: address,
+        tokenDetails: null,
+        success: false,
+        error: message,
+      });
+    }
+  }
+}
+
+/**
+ * Admin-only: refresh a single project's token details from Mobula and log the result.
+ */
+export async function refreshProjectTokenDetailsForAdmin(projectId: string): Promise<{ success: boolean; tokenDetails?: import("../types/tokenDetails").TokenDetails; error?: string }> {
+  const project = await ProjectModel.findById(projectId).select("title tokenDetails").lean();
+  if (!project) {
+    return { success: false, error: "Project not found" };
+  }
+  const address = (project.tokenDetails?.address ?? "").toString().trim();
+  const chain = (project.tokenDetails?.chain ?? "").toString().trim();
+  const projectName = (project.title ?? "").trim() || `Project ${projectId.slice(0, 8)}`;
+  if (!address || !chain) {
+    addTokenUpdateLog({
+      source: "manual",
+      projectId,
+      projectName,
+      contractAddress: address || "(none)",
+      tokenDetails: null,
+      success: false,
+      error: "Project has no token address or chain",
+    });
+    return { success: false, error: "Project has no token address or chain" };
+  }
+
+  try {
+    const fetched = await fetchTokenDetails(address, chain);
+    if (!fetched) {
+      addTokenUpdateLog({
+        source: "manual",
+        projectId,
+        projectName,
+        contractAddress: address,
+        tokenDetails: null,
+        success: false,
+        error: "Failed to fetch token from Mobula",
+      });
+      return { success: false, error: "Failed to fetch token from Mobula" };
+    }
+    const merged = mergeTokenDetailsFromMobula(project.tokenDetails as Record<string, unknown> | undefined, fetched);
+    await ProjectModel.updateOne(
+      { _id: projectId },
+      { $set: { tokenDetails: merged } }
+    );
+    const updated = await ProjectModel.findById(projectId).select("tokenDetails").lean();
+    const tokenDetails = (updated?.tokenDetails ?? merged) as import("../types/tokenDetails").TokenDetails;
+    addTokenUpdateLog({
+      source: "manual",
+      projectId,
+      projectName,
+      contractAddress: address,
+      tokenDetails,
+      success: true,
+    });
+    emitProjectUpdated(projectId);
+    return { success: true, tokenDetails };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    addTokenUpdateLog({
+      source: "manual",
+      projectId,
+      projectName,
+      contractAddress: address,
+      tokenDetails: null,
+      success: false,
+      error: message,
+    });
+    return { success: false, error: message };
+  }
 }
 
 export async function updateProjectLaunchDetails(

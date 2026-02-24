@@ -21,6 +21,8 @@ export interface UserDocument extends Omit<Document, "_id"> {
   proCreditsPerMonth?: number;
   /** Stripe customer id for Checkout (required with Accounts V2 / test mode). */
   stripeCustomerId?: string;
+  /** Unique affiliate/referral code for this user. */
+  affiliateCode?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,6 +90,13 @@ const userSchema = new Schema<UserDocument>({
     type: String,
     trim: true,
     sparse: true,
+  },
+  affiliateCode: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    sparse: true,
+    unique: true,
   },
   createdAt: {
     type: Date,

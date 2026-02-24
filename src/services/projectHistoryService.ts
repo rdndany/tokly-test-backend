@@ -40,12 +40,29 @@ export async function getProjectHistory(
   const project = await ProjectModel.findById(projectId).lean();
   if (!project) throw new Error("Project not found");
 
-  const workspaceId = project.workspaceId?.toString();
-  if (workspaceId) {
-    const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
-    if (!canAccess) throw new Error("Forbidden");
-  } else if (project.userId !== userId) {
-    throw new Error("Forbidden");
+  const userDoc = await UserModel.findById(userId).select("role").lean();
+  let isAdmin = userDoc?.role === "admin";
+  if (!isAdmin) {
+    try {
+      const { clerkClient } = await import("@clerk/express");
+      if (clerkClient) {
+        const clerkUser = await clerkClient.users.getUser(userId);
+        if (clerkUser.publicMetadata?.role === "admin") isAdmin = true;
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  if (isAdmin) {
+    // Platform admin can view any project history
+  } else {
+    const workspaceId = project.workspaceId?.toString();
+    if (workspaceId) {
+      const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
+      if (!canAccess) throw new Error("Forbidden");
+    } else if (project.userId !== userId) {
+      throw new Error("Forbidden");
+    }
   }
 
   const entries = await ProjectHistoryModel.find({ projectId: new mongoose.Types.ObjectId(projectId) })

@@ -34,7 +34,7 @@ export async function createFolderHandler(
     const folder = await createFolder(userId, {
       name: name || "New folder",
       type,
-      workspaceId: type === "workspace" ? workspaceId : undefined,
+      workspaceId: workspaceId ?? undefined,
       parentFolderId: parentFolderId || null,
     });
     emitFoldersUpdated({
@@ -116,11 +116,22 @@ export async function getFolderHandler(
     const { ensureUserCanAccessWorkspace } = await import(
       "../services/workspaceService"
     );
-    if (folder.type === "personal" && folder.userId !== userId) {
-      res.status(403).json({ error: "Access denied" });
-      return;
-    }
-    if (folder.type === "workspace" && folder.workspaceId) {
+    if (folder.type === "personal") {
+      if (folder.userId !== userId) {
+        res.status(403).json({ error: "Access denied" });
+        return;
+      }
+      if (folder.workspaceId) {
+        const canAccess = await ensureUserCanAccessWorkspace(
+          userId,
+          folder.workspaceId
+        );
+        if (!canAccess) {
+          res.status(403).json({ error: "Access denied" });
+          return;
+        }
+      }
+    } else if (folder.type === "workspace" && folder.workspaceId) {
       const canAccess = await ensureUserCanAccessWorkspace(
         userId,
         folder.workspaceId

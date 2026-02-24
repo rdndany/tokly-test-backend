@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
 import Stripe from "stripe";
+import mongoose from "mongoose";
 import config from "../config";
 import UserModel from "../models/User";
 import WorkspaceModel from "../models/Workspace";
+import PaymentModel from "../models/Payment";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("StripeController");
@@ -57,6 +59,7 @@ export async function createProCheckoutSession(
   }
 
   const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : undefined;
+  let workspaceName: string | undefined;
   if (workspaceId) {
     const { ensureUserCanManageWorkspace } = await import("../services/workspaceService");
     try {
@@ -65,6 +68,8 @@ export async function createProCheckoutSession(
       res.status(403).json({ error: "Access denied to this workspace" });
       return;
     }
+    const workspace = await WorkspaceModel.findById(workspaceId).select("name").lean();
+    workspaceName = workspace?.name?.trim() ?? undefined;
   }
   const appUrl = config.app.url.replace(/\/$/, "");
   const successUrl = workspaceId
@@ -106,6 +111,7 @@ export async function createProCheckoutSession(
         creditsPerMonth: String(creditsPerMonth),
         interval,
         ...(workspaceId && { workspaceId }),
+        ...(workspaceName && { workspaceName: workspaceName.slice(0, 500) }),
       },
       line_items: [
         {
@@ -378,6 +384,26 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
           userId,
           credits: safeCredits,
         });
+        const amountCents = session.amount_total ?? 0;
+        if (amountCents > 0) {
+          try {
+            const existing = await PaymentModel.findOne({ stripeSessionId: session.id }).lean();
+            if (!existing) {
+              await PaymentModel.create({
+                stripeSessionId: session.id,
+                userId,
+                workspaceId: workspaceId && mongoose.Types.ObjectId.isValid(workspaceId)
+                  ? new mongoose.Types.ObjectId(workspaceId)
+                  : undefined,
+                priceAmount: amountCents / 100,
+                currency: "usd",
+                type: "topup",
+              });
+            }
+          } catch (payErr) {
+            logger.error("Stripe webhook: failed to record top-up payment", { sessionId: session.id, err: payErr });
+          }
+        }
       } catch (err) {
         logger.error("Stripe webhook: failed to add top-up", { workspaceId, userId, err });
         res.status(500).send("Internal error");
@@ -410,6 +436,24 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
             stripeSubscriptionInterval: interval,
           },
         });
+        const workspaceName =
+          session.metadata?.workspaceName?.trim() ??
+          (await WorkspaceModel.findById(workspaceId).select("name").lean())?.name?.trim();
+        if (workspaceName && stripe) {
+          try {
+            await stripe.subscriptions.update(subscriptionId, {
+              metadata: {
+                workspace_id: workspaceId,
+                workspace_name: workspaceName.slice(0, 500),
+              },
+            });
+          } catch (metaErr) {
+            logger.error("Stripe webhook: failed to set subscription metadata", {
+              subscriptionId,
+              err: metaErr,
+            });
+          }
+        }
         logger.info("Stripe webhook: workspace upgraded to Pro", {
           workspaceId,
           userId,
@@ -426,6 +470,26 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
           userId,
           creditsPerMonth: safeCredits,
         });
+      }
+      const amountCents = session.amount_total ?? 0;
+      if (amountCents > 0) {
+        try {
+          const existing = await PaymentModel.findOne({ stripeSessionId: session.id }).lean();
+          if (!existing) {
+            await PaymentModel.create({
+              stripeSessionId: session.id,
+              userId,
+              workspaceId: workspaceId && mongoose.Types.ObjectId.isValid(workspaceId)
+                ? new mongoose.Types.ObjectId(workspaceId)
+                : undefined,
+              priceAmount: amountCents / 100,
+              currency: "usd",
+              type: "subscription",
+            });
+          }
+        } catch (payErr) {
+          logger.error("Stripe webhook: failed to record subscription payment", { sessionId: session.id, err: payErr });
+        }
       }
     } catch (err) {
       logger.error("Stripe webhook: failed to update plan", { userId, workspaceId, err });

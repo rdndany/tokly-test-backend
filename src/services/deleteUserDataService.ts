@@ -11,6 +11,7 @@ import ProjectFileModel from "../models/ProjectFile";
 import ProjectHistoryModel from "../models/ProjectHistory";
 import StarredProjectModel from "../models/StarredProject";
 import ChatFeedbackModel from "../models/ChatFeedback";
+import PaymentModel from "../models/Payment";
 import UserDailyCreditsModel from "../models/UserDailyCredits";
 import UserMonthlyCreditsModel from "../models/UserMonthlyCredits";
 import FollowModel from "../models/Follow";
@@ -97,6 +98,9 @@ export async function deleteUserData(userId: string): Promise<void> {
     $or: [{ followerId: userId }, { followingId: userId }],
   });
 
-  // 11. User document
+  // 11. Payments (user's payment records)
+  await PaymentModel.deleteMany({ userId });
+
+  // 12. User document
   await UserModel.findByIdAndDelete(userId);
 }

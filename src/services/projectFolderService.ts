@@ -37,13 +37,11 @@ export async function createFolder(
     throw new Error("Folder name must be 100 characters or less");
   }
 
-  if (input.type === "workspace") {
-    const workspaceId = input.workspaceId?.trim();
-    if (!workspaceId) {
-      throw new Error("Workspace ID is required for workspace folders");
-    }
-    await ensureUserCanEditInWorkspace(userId, workspaceId);
+  const workspaceId = input.workspaceId?.trim();
+  if (!workspaceId) {
+    throw new Error("Workspace ID is required for folders (personal and workspace are scoped per workspace)");
   }
+  await ensureUserCanEditInWorkspace(userId, workspaceId);
 
   const MAX_SUBFOLDER_DEPTH = 2; // Folder → Sub folder → Sub folder (3 levels total)
 
@@ -58,6 +56,9 @@ export async function createFolder(
         userId,
         parent.workspaceId.toString()
       );
+    }
+    if (workspaceId && parent.workspaceId && parent.workspaceId.toString() !== workspaceId) {
+      throw new Error("Parent folder must be in the same workspace");
     }
     if (parent.type === "personal" && input.type === "workspace") {
       throw new Error(
@@ -74,9 +75,7 @@ export async function createFolder(
     name,
     type: input.type,
     userId,
-    workspaceId: input.type === "workspace" && input.workspaceId
-      ? new mongoose.Types.ObjectId(input.workspaceId)
-      : null,
+    workspaceId: workspaceId ? new mongoose.Types.ObjectId(workspaceId) : null,
     parentFolderId: input.parentFolderId
       ? new mongoose.Types.ObjectId(input.parentFolderId)
       : null,
@@ -118,7 +117,11 @@ async function canAccessFolder(
   }
 ): Promise<boolean> {
   if (folder.type === "personal") {
-    return folder.userId === userId;
+    if (folder.userId !== userId) return false;
+    if (folder.workspaceId) {
+      return ensureUserCanAccessWorkspace(userId, folder.workspaceId.toString());
+    }
+    return true;
   }
   if (folder.type === "workspace" && folder.workspaceId) {
     return ensureUserCanAccessWorkspace(userId, folder.workspaceId.toString());
@@ -137,6 +140,9 @@ async function ensureUserCanEditFolder(
 ): Promise<void> {
   if (folder.type === "personal") {
     if (folder.userId !== userId) throw new Error("Access denied to this folder");
+    if (folder.workspaceId) {
+      await ensureUserCanEditInWorkspace(userId, folder.workspaceId.toString());
+    }
     return;
   }
   if (folder.type === "workspace" && folder.workspaceId) {
@@ -155,37 +161,38 @@ export async function listFolders(
 ): Promise<ProjectFolderListItem[]> {
   const filter: Record<string, unknown> = {};
 
-  if (options?.type === "personal") {
+  const wsId = options?.workspaceId?.trim();
+  if (options?.type === "personal" && wsId) {
+    const canAccess = await ensureUserCanAccessWorkspace(userId, wsId);
+    if (!canAccess) return [];
     filter.type = "personal";
     filter.userId = userId;
-  } else if (options?.type === "workspace" && options?.workspaceId) {
-    const canAccess = await ensureUserCanAccessWorkspace(
-      userId,
-      options.workspaceId
-    );
+    filter.workspaceId = new mongoose.Types.ObjectId(wsId);
+  } else if (options?.type === "workspace" && wsId) {
+    const canAccess = await ensureUserCanAccessWorkspace(userId, wsId);
     if (!canAccess) return [];
     filter.type = "workspace";
-    filter.workspaceId = new mongoose.Types.ObjectId(options.workspaceId);
-  } else if (options?.workspaceId) {
-    const canAccess = await ensureUserCanAccessWorkspace(
-      userId,
-      options.workspaceId
-    );
+    filter.workspaceId = new mongoose.Types.ObjectId(wsId);
+  } else if (wsId) {
+    const canAccess = await ensureUserCanAccessWorkspace(userId, wsId);
     if (!canAccess) return [];
+    const wsObj = new mongoose.Types.ObjectId(wsId);
     filter.$or = [
-      { type: "personal", userId },
-      {
-        type: "workspace",
-        workspaceId: new mongoose.Types.ObjectId(options.workspaceId),
-      },
+      { type: "personal", userId, workspaceId: wsObj },
+      { type: "workspace", workspaceId: wsObj },
     ];
   } else {
+    const userWorkspaceIds = await getWorkspaceIdsForUser(userId);
     filter.$or = [
-      { type: "personal", userId },
       {
-        type: "workspace",
-        workspaceId: { $in: await getWorkspaceIdsForUser(userId) },
+        type: "personal",
+        userId,
+        $or: [
+          { workspaceId: { $in: userWorkspaceIds } },
+          { workspaceId: null },
+        ],
       },
+      { type: "workspace", workspaceId: { $in: userWorkspaceIds } },
     ];
   }
 
@@ -358,6 +365,9 @@ export async function addProjectsToFolder(
   for (const project of projects) {
     if (folder.type === "personal") {
       if (project.userId !== userId) continue;
+      if (folder.workspaceId && project.workspaceId?.toString() !== folder.workspaceId.toString()) {
+        continue;
+      }
     } else if (folder.workspaceId) {
       try {
         await ensureUserCanEditInWorkspace(

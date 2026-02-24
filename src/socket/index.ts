@@ -109,15 +109,31 @@ export function initSocket(httpServer: HttpServer): Server {
           socket.emit("error", { message: "Project not found" });
           return;
         }
-        const workspaceId = project.workspaceId?.toString();
-        if (!workspaceId) {
-          socket.emit("error", { message: "Project has no workspace" });
-          return;
+        let isAdmin = false;
+        try {
+          const userDoc = await UserModel.findById(userId).select("role").lean();
+          if (userDoc?.role === "admin") isAdmin = true;
+          if (!isAdmin) {
+            const { clerkClient } = await import("@clerk/express");
+            if (clerkClient) {
+              const clerkUser = await clerkClient.users.getUser(userId);
+              if (clerkUser.publicMetadata?.role === "admin") isAdmin = true;
+            }
+          }
+        } catch {
+          // Ignore
         }
-        const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
-        if (!canAccess) {
-          socket.emit("error", { message: "Access denied" });
-          return;
+        if (!isAdmin) {
+          const workspaceId = project.workspaceId?.toString();
+          if (!workspaceId) {
+            socket.emit("error", { message: "Project has no workspace" });
+            return;
+          }
+          const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
+          if (!canAccess) {
+            socket.emit("error", { message: "Access denied" });
+            return;
+          }
         }
         const room = `project:${projectId}`;
         await socket.join(room);

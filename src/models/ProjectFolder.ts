@@ -18,7 +18,7 @@ const projectFolderSchema = new Schema<ProjectFolderDocument>(
     name: { type: String, required: true, trim: true },
     type: { type: String, required: true, enum: ["personal", "workspace"] },
     userId: { type: String, required: true, index: true },
-    workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", default: null },
+    workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", default: null, index: true },
     parentFolderId: {
       type: Schema.Types.ObjectId,
       ref: "ProjectFolder",
@@ -27,6 +27,9 @@ const projectFolderSchema = new Schema<ProjectFolderDocument>(
   },
   { timestamps: true }
 );
+
+projectFolderSchema.index({ workspaceId: 1, type: 1 });
+projectFolderSchema.index({ workspaceId: 1, userId: 1 });
 
 const ProjectFolderModel = mongoose.model<ProjectFolderDocument>(
   "ProjectFolder",

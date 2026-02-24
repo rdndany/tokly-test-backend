@@ -50,6 +50,7 @@ import {
 import { VercelService } from "../services/vercelService";
 import { getProjectHistory as getProjectHistoryService } from "../services/projectHistoryService";
 import StarredProjectModel from "../models/StarredProject";
+import UserModel from "../models/User";
 import { removeProjectFromFolder } from "../services/projectFolderService";
 import { sendMessage as sendChatMessage } from "../services/chatService";
 import { requireCredits } from "../services/creditsService";
@@ -743,16 +744,29 @@ export async function getProject(req: Request, res: Response): Promise<void> {
       res.status(404).json({ error: "Project not found" });
       return;
     }
-    const workspaceId = project.workspaceId?.toString();
-    if (workspaceId) {
-      const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
-      if (!canAccess) {
+    let isAdmin = false;
+    try {
+      const userDoc = await UserModel.findById(userId).select("role").lean();
+      if (userDoc?.role === "admin") isAdmin = true;
+      if (!isAdmin && clerkClient) {
+        const clerkUser = await clerkClient.users.getUser(userId);
+        if (clerkUser.publicMetadata?.role === "admin") isAdmin = true;
+      }
+    } catch {
+      // Ignore lookup errors; isAdmin stays false
+    }
+    if (!isAdmin) {
+      const workspaceId = project.workspaceId?.toString();
+      if (workspaceId) {
+        const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
+        if (!canAccess) {
+          res.status(403).json({ error: "Forbidden" });
+          return;
+        }
+      } else if (project.userId !== userId) {
         res.status(403).json({ error: "Forbidden" });
         return;
       }
-    } else if (project.userId !== userId) {
-      res.status(403).json({ error: "Forbidden" });
-      return;
     }
     let response: Record<string, unknown> = { ...project };
     if (project.folderId) {

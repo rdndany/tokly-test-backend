@@ -1,3 +1,4 @@
+import UserModel from "../models/User";
 import ProjectFileModel from "../models/ProjectFile";
 import { getProjectById } from "./projectService";
 import {
@@ -9,6 +10,18 @@ async function ensureUserCanAccessProject(
   userId: string,
   project: { userId: string; workspaceId?: { toString(): string } }
 ): Promise<void> {
+  const { clerkClient } = await import("@clerk/express");
+  const userDoc = await UserModel.findById(userId).select("role").lean();
+  if (userDoc?.role === "admin") return;
+  if (clerkClient) {
+    try {
+      const clerkUser = await clerkClient.users.getUser(userId);
+      if (clerkUser.publicMetadata?.role === "admin") return;
+    } catch {
+      // Ignore
+    }
+  }
+
   const workspaceId = project.workspaceId?.toString();
   if (workspaceId) {
     const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);
@@ -22,6 +35,18 @@ async function ensureUserCanEditProject(
   userId: string,
   project: { userId: string; workspaceId?: { toString(): string } }
 ): Promise<void> {
+  const { clerkClient } = await import("@clerk/express");
+  const userDoc = await UserModel.findById(userId).select("role").lean();
+  if (userDoc?.role === "admin") return;
+  if (clerkClient) {
+    try {
+      const clerkUser = await clerkClient.users.getUser(userId);
+      if (clerkUser.publicMetadata?.role === "admin") return;
+    } catch {
+      // Ignore
+    }
+  }
+
   const workspaceId = project.workspaceId?.toString();
   if (workspaceId) {
     const canAccess = await ensureUserCanAccessWorkspace(userId, workspaceId);

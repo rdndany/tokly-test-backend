@@ -17,7 +17,10 @@ import invitationRoutes from "./routes/invitationRoutes";
 import uploadRoutes from "./routes/uploadRoutes";
 import projectFolderRoutes from "./routes/projectFolderRoutes";
 import stripeRoutes from "./routes/stripeRoutes";
+import adminRoutes from "./routes/adminRoutes";
+import affiliateRoutes from "./routes/affiliateRoutes";
 import { stripeWebhook } from "./controllers/StripeController";
+import { startTokenUpdateCron } from "./services/cronService";
 
 dotenv.config();
 
@@ -63,9 +66,12 @@ app.use("/api/invitations", invitationRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/folders", projectFolderRoutes);
 app.use("/api/stripe", stripeRoutes);
+app.use("/api/admin", adminRoutes);
+app.use("/api/affiliate", affiliateRoutes);
 
 const start = async () => {
   await connectDatabase();
+  startTokenUpdateCron();
   initSocket(httpServer);
   if (config.resend.apiKey) {
     logger.info("Resend email service initialized");

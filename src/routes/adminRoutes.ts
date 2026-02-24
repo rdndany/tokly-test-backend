@@ -1,0 +1,39 @@
+import { Router } from "express";
+import { checkAdminAuth } from "../middlewares/adminAuth";
+import {
+  getDashboardStats,
+  getRevenueAnalytics,
+  getUsers,
+  getUserById,
+  getWorkspaces,
+  getWorkspaceById,
+  getProjects,
+  getProjectById,
+  updateUserRole,
+  removeUser,
+  getTokenUpdateLogsHandler,
+  deleteTokenUpdateLogsHandler,
+  refreshProjectTokenDetailsHandler,
+  getAdminReferralStatsHandler,
+  getAllReferralUsersHandler,
+} from "../controllers/AdminController";
+
+const router = Router();
+
+router.get("/dashboard/stats", checkAdminAuth, getDashboardStats);
+router.get("/dashboard/revenue-analytics", checkAdminAuth, getRevenueAnalytics);
+router.get("/users", checkAdminAuth, getUsers);
+router.get("/workspaces", checkAdminAuth, getWorkspaces);
+router.get("/workspaces/:workspaceId", checkAdminAuth, getWorkspaceById);
+router.get("/projects", checkAdminAuth, getProjects);
+router.get("/projects/:projectId", checkAdminAuth, getProjectById);
+router.post("/projects/:projectId/refresh-token-details", checkAdminAuth, refreshProjectTokenDetailsHandler);
+router.get("/logs/token-updates", checkAdminAuth, getTokenUpdateLogsHandler);
+router.delete("/logs/token-updates", checkAdminAuth, deleteTokenUpdateLogsHandler);
+router.get("/referrals/stats", checkAdminAuth, getAdminReferralStatsHandler);
+router.get("/referrals/users", checkAdminAuth, getAllReferralUsersHandler);
+router.get("/users/:userId", checkAdminAuth, getUserById);
+router.patch("/users/:userId/role", checkAdminAuth, updateUserRole);
+router.delete("/users/:userId", checkAdminAuth, removeUser);
+
+export default router;
