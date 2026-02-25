@@ -19,6 +19,8 @@ import projectFolderRoutes from "./routes/projectFolderRoutes";
 import stripeRoutes from "./routes/stripeRoutes";
 import adminRoutes from "./routes/adminRoutes";
 import affiliateRoutes from "./routes/affiliateRoutes";
+import dailyStatsRoutes from "./routes/dailyStatsRoutes";
+import ga4Routes from "./routes/ga4Routes";
 import { stripeWebhook } from "./controllers/StripeController";
 import { startTokenUpdateCron } from "./services/cronService";
 
@@ -68,6 +70,8 @@ app.use("/api/folders", projectFolderRoutes);
 app.use("/api/stripe", stripeRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/affiliate", affiliateRoutes);
+app.use("/api/stats", dailyStatsRoutes);
+app.use("/api/ga4", ga4Routes);
 
 const start = async () => {
   await connectDatabase();
