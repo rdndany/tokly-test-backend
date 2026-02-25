@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import * as dailyStatsService from "../services/dailyStatsService";
+import { getProjectById } from "../services/projectService";
 import { HTTPSTATUS } from "../config/http.config";
 
 export async function incrementView(req: Request, res: Response): Promise<void> {
@@ -10,6 +11,11 @@ export async function incrementView(req: Request, res: Response): Promise<void> 
         success: false,
         message: "projectId and visitorId are required",
       });
+      return;
+    }
+    const project = await getProjectById(projectId);
+    if (project?.analyticsDisabled) {
+      res.status(HTTPSTATUS.OK).json({ success: true, data: { message: "Analytics disabled" } });
       return;
     }
     await dailyStatsService.incrementView(projectId, visitorId);

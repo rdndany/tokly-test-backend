@@ -45,6 +45,7 @@ import {
   updateProjectAuditKyc as updateAuditKycService,
   updateProjectListingPlatforms as updateListingPlatformsService,
   updateHideToklyBadge as updateHideToklyBadgeService,
+  updateAnalyticsDisabled as updateAnalyticsDisabledService,
   captureProjectThumbnail as captureProjectThumbnailService,
 } from "../services/projectService";
 import { VercelService } from "../services/vercelService";
@@ -658,6 +659,37 @@ export async function updateHideToklyBadge(
       err instanceof Error
         ? err.message
         : "Failed to update Hide Tokly badge";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+export async function updateAnalyticsDisabled(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  const analyticsDisabled = req.body?.analyticsDisabled === true;
+  try {
+    const project = await updateAnalyticsDisabledService(userId, projectId, {
+      analyticsDisabled,
+    });
+    res.status(200).json(project);
+  } catch (err) {
+    const msg =
+      err instanceof Error
+        ? err.message
+        : "Failed to update analytics setting";
     const status =
       msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
     res.status(status).json({ error: msg });

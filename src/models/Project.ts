@@ -49,6 +49,8 @@ export interface ProjectDocument extends Document {
   >;
   /** When true, hide the "Edit with Tokly" badge (Pro Plan feature, works for now) */
   hideToklyBadge?: boolean;
+  /** When true, stop collecting analytics (view counts) for this project */
+  analyticsDisabled?: boolean;
   /** Project visibility: public (discoverable) or workspace (hidden, prevent copying). Default: workspace */
   projectVisibility?: "public" | "workspace";
   /** SEO: favicon URL (website icon) */
@@ -303,6 +305,7 @@ const projectSchema = new Schema<ProjectDocument>(
     sectionOrder: { type: Schema.Types.Mixed },
     sectionCustomization: { type: Schema.Types.Mixed },
     hideToklyBadge: { type: Boolean },
+    analyticsDisabled: { type: Boolean },
     projectVisibility: { type: String, enum: ["public", "workspace"], default: "workspace" },
     favicon: { type: String, trim: true },
     seoTitle: { type: String, trim: true },

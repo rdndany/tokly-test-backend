@@ -19,6 +19,7 @@ import {
   updateProjectPublishAddress,
   unpublishProject,
   updateHideToklyBadge,
+  updateAnalyticsDisabled,
   getProjectByDomain,
   getDomainSetupInfo,
   updateProjectCustomDomain,
@@ -73,6 +74,7 @@ router.patch("/:projectId/seo", checkAuth, updateProjectSeo);
 router.patch("/:projectId/publish-address", checkAuth, updateProjectPublishAddress);
 router.patch("/:projectId/unpublish", checkAuth, unpublishProject);
 router.patch("/:projectId/hide-tokly-badge", checkAuth, updateHideToklyBadge);
+router.patch("/:projectId/analytics-disabled", checkAuth, updateAnalyticsDisabled);
 router.get("/:projectId/domain-setup-info", checkAuth, getDomainSetupInfo);
 router.patch("/:projectId/custom-domain", checkAuth, updateProjectCustomDomain);
 router.post("/:projectId/capture-thumbnail", checkAuth, captureThumbnail);

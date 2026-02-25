@@ -264,6 +264,7 @@ export async function getProjectById(projectId: string) {
       sectionOrder: project.sectionOrder,
       sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: project.hideToklyBadge,
+    analyticsDisabled: project.analyticsDisabled,
     projectVisibility: project.projectVisibility ?? "workspace",
     favicon: project.favicon,
     seoTitle: project.seoTitle,
@@ -493,6 +494,7 @@ export async function getProjectByPublishUrl(
       sectionOrder: project.sectionOrder,
       sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: project.hideToklyBadge,
+    analyticsDisabled: project.analyticsDisabled,
     projectVisibility: project.projectVisibility ?? "workspace",
     favicon: project.favicon,
     seoTitle: project.seoTitle,
@@ -534,7 +536,7 @@ export async function checkPublishUrlAvailability(
   return { available: !existing };
 }
 
-/** Update project publish address (subdomain+domain). Validates uniqueness. Only owner and admin can publish. */
+/** Update project publish address (subdomain+domain). Validates uniqueness. Only owner and admin can publish. Requires template. */
 export async function updateProjectPublishAddress(
   userId: string,
   projectId: string,
@@ -542,6 +544,9 @@ export async function updateProjectPublishAddress(
 ) {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
+  if (!project.templateId || !String(project.templateId).trim()) {
+    throw new Error("Finish the onboarding before publishing");
+  }
   const workspaceId = project.workspaceId?.toString();
   if (workspaceId) {
     await ensureUserCanManageWorkspace(userId, workspaceId);
@@ -739,6 +744,26 @@ export async function updateHideToklyBadge(
   const updated = await getProjectById(projectId);
   if (!updated) throw new Error("Project not found");
   logProjectChange(projectId, userId, "Updated hide Tokly badge", "general");
+  emitProjectUpdated(projectId);
+  return updated;
+}
+
+export async function updateAnalyticsDisabled(
+  userId: string,
+  projectId: string,
+  input: { analyticsDisabled: boolean }
+) {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  await ensureUserCanEditProject(userId, project);
+  const analyticsDisabled = input.analyticsDisabled === true;
+  await ProjectModel.updateOne(
+    { _id: projectId },
+    { $set: { analyticsDisabled } }
+  );
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  logProjectChange(projectId, userId, "Updated analytics disabled", "general");
   emitProjectUpdated(projectId);
   return updated;
 }
@@ -2397,6 +2422,7 @@ export async function listProjectsByUser(
       sectionOrder: p.sectionOrder,
       sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: p.hideToklyBadge,
+      analyticsDisabled: p.analyticsDisabled,
       projectVisibility: p.projectVisibility ?? "workspace",
       favicon: p.favicon,
       seoTitle: p.seoTitle,
@@ -2458,6 +2484,7 @@ export async function listProjectsByUser(
       sectionOrder: p.sectionOrder,
       sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
       hideToklyBadge: p.hideToklyBadge,
+      analyticsDisabled: p.analyticsDisabled,
       projectVisibility: p.projectVisibility ?? "workspace",
       favicon: p.favicon,
       seoTitle: p.seoTitle,
@@ -2524,6 +2551,7 @@ export async function listProjectsByUser(
     sectionOrder: p.sectionOrder,
     sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
     hideToklyBadge: p.hideToklyBadge,
+    analyticsDisabled: p.analyticsDisabled,
     projectVisibility: p.projectVisibility ?? "workspace",
     favicon: p.favicon,
     seoTitle: p.seoTitle,
