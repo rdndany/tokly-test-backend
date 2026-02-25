@@ -100,6 +100,50 @@ export async function getWorkspaceById(req: Request, res: Response): Promise<voi
   }
 }
 
+export async function patchWorkspace(req: Request, res: Response): Promise<void> {
+  try {
+    const workspaceId = req.params.workspaceId;
+    if (!workspaceId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "Invalid workspaceId" });
+      return;
+    }
+    const body = req.body as {
+      planStatus?: "free" | "pro";
+      proCreditsPerMonth?: number;
+      addCredits?: number;
+    };
+    const planStatus = body.planStatus;
+    const proCreditsPerMonth =
+      typeof body.proCreditsPerMonth === "number" ? body.proCreditsPerMonth : undefined;
+    const addCredits = typeof body.addCredits === "number" ? body.addCredits : undefined;
+
+    if (addCredits !== undefined && (addCredits < 0 || !Number.isInteger(addCredits))) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "addCredits must be a non-negative integer" });
+      return;
+    }
+    if (proCreditsPerMonth !== undefined && (proCreditsPerMonth < 0 || !Number.isInteger(proCreditsPerMonth))) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "proCreditsPerMonth must be a non-negative integer" });
+      return;
+    }
+
+    const workspace = await AdminService.updateWorkspaceById(workspaceId, {
+      planStatus,
+      proCreditsPerMonth,
+      addCredits,
+    });
+    if (!workspace) {
+      res.status(HTTPSTATUS.NOT_FOUND).json({ message: "Workspace not found" });
+      return;
+    }
+    res.status(HTTPSTATUS.OK).json(workspace);
+  } catch (error) {
+    logger.error("Error updating workspace", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({
+      message: "Failed to update workspace",
+    });
+  }
+}
+
 export async function getProjectById(req: Request, res: Response): Promise<void> {
   try {
     const projectId = req.params.projectId;

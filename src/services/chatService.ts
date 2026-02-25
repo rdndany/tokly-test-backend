@@ -57,8 +57,40 @@ export type ChatMessage = {
   feedbackType?: "positive" | "negative";
   questionnaireMetadata?: QuestionnaireMetadata;
   /** When set, frontend should show this questionnaire for the user to update project details */
-  requestQuestionnaire?: "description" | "logo" | "socials" | "audit-kyc" | "listing-platforms" | "tokenomics" | "roadmap" | "faq" | "team" | "token" | "token-address" | "token-name-symbol" | "token-features";
+  requestQuestionnaire?: "description" | "logo" | "socials" | "template" | "template-style" | "audit-kyc" | "listing-platforms" | "tokenomics" | "roadmap" | "faq" | "team" | "token" | "token-address" | "token-name-symbol" | "token-features";
 };
+
+/**
+ * Infer which questionnaire to open from the AI assistant response.
+ * When the response invites using a form (e.g. "use the form below", "use the form to add it")
+ * and mentions a topic (FAQ, audit, team, etc.), return that questionnaire so the frontend
+ * can open it without parsing content.
+ */
+function inferRequestQuestionnaireFromAssistantContent(
+  content: string
+): RequestedQuestionnaire | null {
+  const formPhrase =
+    /form\s+below|use\s+(the\s+)?form|form\s+to\s+add|the\s+form\s+to\s+add/i;
+  if (!formPhrase.test(content)) return null;
+  const lower = content.toLowerCase();
+  if (/\bfaq\b|questions?\s+and\s+answers?/.test(lower)) return "faq";
+  if (/\bteam\b|team\s+members?|team\s+section/.test(lower)) return "team";
+  if (/\broadmap\b|phases?\s+and\s+milestones?/.test(lower)) return "roadmap";
+  if (/\btokenomics\b|total\s+supply|token\s+allocations?/.test(lower)) return "tokenomics";
+  if (/\btemplate\s+style\b|template\s+design|color\s+theme|color\s+scheme|\bfonts?\b/.test(lower)) return "template-style";
+  if (/\btemplate\s+layout\b|choose\s+template\b|\b(aurora|minimal|cobalt)\b/.test(lower)) return "template";
+  if (/\btemplate\b/.test(lower)) return "template";
+  if (/\baudit\b|kyc\b|audit\s+report/.test(lower)) return "audit-kyc";
+  if (/\blisting\s+platforms?|vote\s+listing/.test(lower)) return "listing-platforms";
+  if (/\btoken\s+address|blockchain\b|contract\s+address/.test(lower)) return "token-address";
+  if (/\btoken\s+name|token\s+symbol|name\s+and\s+symbol/.test(lower)) return "token-name-symbol";
+  if (/\btoken\s+features?/.test(lower)) return "token-features";
+  if (/\bdescription\b/.test(lower)) return "description";
+  if (/\blogo\b/.test(lower)) return "logo";
+  if (/\bsocial\s+links?|socials\b/.test(lower)) return "socials";
+  if (/\btoken\s+details?/.test(lower)) return "token";
+  return null;
+}
 
 const HELPFUL_IDEAS_RECOMMENDATION =
   "Try picking a helpful idea below – for example, Choose Template – to get started.";
@@ -118,6 +150,10 @@ function buildProjectContext(project: {
   kycProvider?: string | null;
   kycLink?: string | null;
   listingPlatforms?: { providerId: string; url: string }[] | null;
+  templateId?: string | null;
+  fontFamily?: string | null;
+  colorSchemaId?: string | null;
+  sectionCustomization?: Record<string, { layout?: { type?: string } }> | null;
   tokenDetails?: {
     address?: string;
     chain?: string;
@@ -167,6 +203,29 @@ function buildProjectContext(project: {
     const parts = lp.map((x) => `${x.providerId}: ${x.url}`);
     lines.push(`- Listing platforms: ${parts.join("; ")}`);
   }
+  if (project.templateId) lines.push(`- Template: ${project.templateId}`);
+  const sectionCustomization = project.sectionCustomization;
+  if (sectionCustomization && typeof sectionCustomization === "object" && Object.keys(sectionCustomization).length > 0) {
+    const sectionLabels: Record<string, string> = {
+      hero: "Hero",
+      about: "About",
+      tokenomics: "Tokenomics",
+      roadmap: "Roadmap",
+      faq: "FAQ",
+      team: "Team",
+      "live-chart": "Live chart",
+      "how-to-buy": "How to buy",
+      "join-community": "Join community",
+    };
+    const parts = Object.entries(sectionCustomization)
+      .filter(([, v]) => v?.layout?.type)
+      .map(([id, v]) => `${sectionLabels[id] ?? id}: ${v!.layout!.type}`);
+    if (parts.length > 0) {
+      lines.push(`- Section layouts (editable in Sections tab): ${parts.join("; ")}`);
+    }
+  }
+  if (project.fontFamily) lines.push(`- Font: ${project.fontFamily}`);
+  if (project.colorSchemaId) lines.push(`- Color theme: ${project.colorSchemaId}`);
   if (isTokenomicsSet(project)) {
     if (project.totalSupply?.trim()) lines.push(`- Tokenomics total supply: ${project.totalSupply}`);
     const allocs = project.allocations;
@@ -250,7 +309,14 @@ RULES:
 - When redirecting off-topic or when the user asks what to do next, recommend the helpful ideas below the chat: "${HELPFUL_IDEAS_RECOMMENDATION}"
 
 CRITICAL - HONESTY AND CAPABILITIES:
-- When you cannot do something, say so directly. Do NOT suggest "say X and I'll open a form" – only description, logo, social links, audit/KYC, listing platforms, token name/symbol, and token features can be updated via forms, and those are handled before you see them.
+- Only these actions have a form/questionnaire that can open: description, logo, social links, template (choose Aurora/Minimal/Cobalt), template style (colors and fonts), audit/KYC, listing platforms, tokenomics, roadmap, FAQ, team, token details (address, name/symbol), token features. For ANY other request (e.g. "update visuals", "edit graphics", "change images", "edit hero text"), do NOT say "a form will appear" or "use the form that will appear" – there is no form for those. Either direct the user to the correct place in the app or say you can't do that from chat.
+- When the user asks to edit hero text, tagline, or hero one-liner: tell them "You can edit the hero text in the General tab. Open the project sidebar and go to the General tab to update the tagline." Do NOT say a form will appear.
+- When the user asks to update visuals, graphics, or images (and they do not mean logo): there is no questionnaire for that. Say you can't update those from chat and suggest they use the Design or relevant section of the project editor. Do NOT say a form will appear.
+- When you cannot do something, say so directly. Do NOT suggest "say X and I'll open a form" except for the actions listed above that actually have forms.
+- Template and layout: The current template (e.g. Aurora, Minimal, Cobalt) and each section's layout are in CURRENT PROJECT. Users can change the overall template via the "Choose template" form, or change individual section layouts in the Sections tab. When the user asks what template they have, what layout they use, or which sections look like what, use CURRENT PROJECT (Template and "Section layouts") to answer. If they want to change a specific section's layout, tell them to use the Sections tab to pick a layout per section.
+- When the user asks to change or modify the template (e.g. "change template", "modify template") without specifying layout or style, ask: "Do you want to change the entire template layout (your current template is [use CURRENT PROJECT Template if provided, e.g. Aurora]) or change the template styles (colors and fonts)? Reply with 'layout' or 'style' and I'll open the right form." Do NOT say "form below" in this message – wait for their reply.
+- When the user asks to change the template color, theme, font, or style (e.g. "Sunset glow", "Pixelify Sans", "change template colors"), the template style form will open. Say: "I'll open the template style form below so you can choose a color theme and font. You can also change the color theme and fonts anytime in the Template Design tab."
+- When the user asks to change the template layout (e.g. "change layout", "switch to Minimal", "different template"), say: "I'll open the choose template form below so you can pick Aurora, Minimal, or Cobalt. You can also change each section's layout individually in the Sections tab."
 - You CANNOT change token price, market cap, volume, liquidity, or any market data – these come from on-chain data and are read-only. Simply say: "I can't change that – it's determined by the market."
 - If the user provides new description/logo/token text/features/audit/KYC/listing platforms in chat, do NOT say you updated it. Say: "I can't update that from chat. Use the form above when it appears, or say 'update description' / 'update logo' / 'update token name' / 'update token features' / 'add audit' / 'add KYC' / 'listing platforms' to open it."
 - For any request you cannot fulfill, state clearly that you cannot do it. Never suggest workarounds that don't exist. Never claim to have done something you cannot do.`;
@@ -372,6 +438,9 @@ export async function sendMessage(
     userName,
     createdAt: new Date().toISOString(),
   });
+
+  // Optional: backend could emit "chat:thinking" here so the frontend shows "Thinking..."
+  // based on server state (user prompt received, AI not yet responded) instead of inferring from loading + last message.
 
   // GUARD: Token details required (address+chain or name+symbol for pre-launch).
   if (!hasToken) {
@@ -526,6 +595,10 @@ export async function sendMessage(
         "I'll help you add or update audit and KYC information. Please use the form below.",
       "listing-platforms":
         "I'll help you add vote listing platforms. Please use the form below.",
+      template:
+        "I'll open the choose template form below so you can pick Aurora, Minimal, or Cobalt.",
+      "template-style":
+        "I'll open the template style form below so you can choose a color theme and font for your landing page. You can also change the color theme and fonts anytime in the Template Design tab.",
     };
     let assistantContent = acknowledgments[requestedQuestionnaire];
     if (tokenFeaturesNeedsAddress) {
@@ -611,17 +684,22 @@ export async function sendMessage(
 
   const responseTimeSeconds = Math.round((Date.now() - startTime) / 1000);
 
-  // Persist assistant message
+  // Infer which questionnaire to open from the AI response (e.g. "use the form to add audit")
+  const inferredQuestionnaire = inferRequestQuestionnaireFromAssistantContent(assistantContent);
+
+  // Persist assistant message (with requestQuestionnaire so frontend opens the right form)
   await ProjectChatMessageModel.create({
     projectId: projectIdObj,
     role: "assistant",
     content: assistantContent,
     responseTimeSeconds,
+    ...(inferredQuestionnaire && { metadata: { requestQuestionnaire: inferredQuestionnaire } }),
   });
   emitChatAssistant(projectId, {
     content: assistantContent,
     responseTimeSeconds,
     createdAt: new Date().toISOString(),
+    ...(inferredQuestionnaire && { requestQuestionnaire: inferredQuestionnaire }),
   });
 
   const fullHistory = await getConversation(projectId, userId);

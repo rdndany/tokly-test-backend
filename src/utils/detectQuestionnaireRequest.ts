@@ -6,6 +6,8 @@ export type RequestedQuestionnaire =
   | "description"
   | "logo"
   | "socials"
+  | "template"
+  | "template-style"
   | "audit-kyc"
   | "listing-platforms"
   | "tokenomics"
@@ -30,6 +32,47 @@ const DESCRIPTION_PATTERNS = [
   // Short intents: "description", "the description", "project description" (when clearly asking to update)
   /^\s*description\s*$/i,
   /^\s*(the\s+)?(project\s+)?(token\s+)?description\s*(please|pls)?\s*$/i,
+];
+
+/** Generic "change template" – no form; AI should ask layout vs style */
+const TEMPLATE_GENERIC_PATTERNS = [
+  /\b(change|modify|update|switch)\s+(the\s+)?template\s*$/i,
+  /\b(change|modify|update)\s+(the\s+)?template\b(?!\s+(color|colors|theme|font|style|layout))/i,
+  /\bI\s+want\s+to\s+(change|modify|update)\s+(the\s+)?template\s*$/i,
+];
+
+/** Change entire template layout (Aurora / Minimal / Cobalt) → choose-template questionnaire */
+const TEMPLATE_LAYOUT_PATTERNS = [
+  /\b(change|switch|pick)\s+(the\s+)?(entire\s+)?(template\s+)?layout\b/i,
+  /\b(change|switch)\s+(the\s+)?(whole|entire)\s+template\b/i,
+  /\b(different|another)\s+template\s*(layout)?\b/i,
+  /\b(aurora|minimal|cobalt)\s*$/i,
+  /\b(change|switch)\s+to\s+(aurora|minimal|cobalt)\b/i,
+  /\btemplate\s+layout\b/i,
+  /\b(the\s+)?layout\b/i,
+  /\b(change|update)\s+(the\s+)?layout\b/i,
+];
+
+/** Change template style (colors and fonts) → template-style questionnaire */
+const TEMPLATE_STYLE_PATTERNS = [
+  /\b(update|change|modify|edit|set)\s+(the\s+)?(template\s+)?(color|colors|theme|style|look)\b/i,
+  /\b(update|change|modify|edit)\s+(the\s+)?(color\s+)?(theme|schema|palette)\b/i,
+  /\b(update|change|modify|edit)\s+(the\s+)?font\b/i,
+  /\b(change|switch)\s+(to\s+)?(sunset\s+glow|pixelify)\b/i,
+  /\bsunset\s+glow\s+(theme|color)\b/i,
+  /\bpixelify\s+sans\b/i,
+  /\b(template\s+)?(theme|color|colors)\s+(update|change|modify)\b/i,
+  /\bchoose\s+(a\s+)?(different\s+)?(theme|color|font)\b/i,
+  /\bI\s+want\s+(sunset\s+glow|pixelify|a\s+different\s+theme)\b/i,
+  /\bhow\s+can\s+I\s+(change|update|modify)\s+(the\s+)?(template\s+)?(color|colors|theme|font|style)\b/i,
+  /\bhow\s+do\s+I\s+(change|update)\s+(the\s+)?(template\s+)?(color|colors|theme|font)\b/i,
+  /\bcan\s+I\s+(change|update)\s+(the\s+)?(template\s+)?(color|colors|theme|font)\b/i,
+  /\b(change|update)\s+(the\s+)?template\s+colors?\b/i,
+  /^\s*(color|colors|theme|font)\s*(please|pls)?\s*$/i,
+  /^\s*(change|update)\s+(color|theme|font)\s*$/i,
+  /\b(template\s+)?style(s)?\b/i,
+  /\b(template\s+)?colors?\b/i,
+  /\b(template\s+)?fonts?\b/i,
 ];
 
 const LOGO_PATTERNS = [
@@ -118,6 +161,9 @@ const AUDIT_KYC_PATTERNS = [
   /\badd\s+(audit|kyc)\s+(report|info|information)\b/i,
   /\bI\s+want\s+to\s+(add|update|change)\s+(audit|kyc)\b/i,
   /\b(add|include)\s+(the\s+)?(an?\s+)?(audit|kyc)\b/i,
+  // "Audit and KYC" (helpful-ideas button) and variants
+  /\baudit\s+and\s+kyc\b/i,
+  /\bkyc\s+and\s+audit\b/i,
   /^\s*(add\s+)?(audit)\s*$/i,
   /^\s*(add\s+)?(kyc)\s*$/i,
   /^\s*(audit|kyc)\s+(please|pls)?\s*$/i,
@@ -261,6 +307,16 @@ function inferQuestionnaireFromContext(
   if (/\bteam\b/.test(lower) || /\bteam\s+members?\b/.test(lower)) {
     return "team";
   }
+  // Template clarification: last message asked layout vs style
+  if (/\btemplate\b/.test(lower) && (/\blayout\b/.test(lower) || /\bstyle(s)?\b/.test(lower) || /\bcolors?\b/.test(lower) || /\bfonts?\b/.test(lower))) {
+    const userLower = userMessage.toLowerCase().trim();
+    if (/\blayout\b|^\s*(the\s+)?layout\s*$|entire|whole\s+template|different\s+template|aurora|minimal|cobalt/i.test(userLower)) {
+      return "template";
+    }
+    if (/\bstyle\b|styles|color|colors|font|fonts|theme\b/i.test(userLower)) {
+      return "template-style";
+    }
+  }
   return null;
 }
 
@@ -289,6 +345,17 @@ export function detectQuestionnaireRequest(
   }
   if (DESCRIPTION_PATTERNS.some((p) => p.test(trimmed))) {
     return "description";
+  }
+  // Layout (Aurora/Minimal/Cobalt) and style (colors/fonts) before generic
+  if (TEMPLATE_LAYOUT_PATTERNS.some((p) => p.test(trimmed))) {
+    return "template";
+  }
+  if (TEMPLATE_STYLE_PATTERNS.some((p) => p.test(trimmed))) {
+    return "template-style";
+  }
+  // Generic "change template" only → let AI ask layout vs style (return null)
+  if (TEMPLATE_GENERIC_PATTERNS.some((p) => p.test(trimmed))) {
+    return null;
   }
   if (SOCIALS_PATTERNS.some((p) => p.test(trimmed))) {
     return "socials";

@@ -13,6 +13,8 @@ import {
   fetchStripeChargeSummary,
   fetchStripeActiveSubscriptionCount,
 } from "./stripeRevenueService";
+import { PRO_FLEX_CREDITS_DEFAULT } from "../config/planLimits";
+import type { WorkspacePlanStatus } from "../models/Workspace";
 
 export interface AdminDashboardStats {
   users: { totalUsers: number };
@@ -582,6 +584,66 @@ export async function getWorkspaceById(
     memberCount: members.length,
     projectCount: projectsList.length,
   };
+}
+
+export interface AdminUpdateWorkspaceInput {
+  /** Set plan to "pro" or "free". */
+  planStatus?: WorkspacePlanStatus;
+  /** Pro subscription credits per month (used when planStatus is "pro"). Default 100. */
+  proCreditsPerMonth?: number;
+  /** Add this many credits to top-up balance. Expiry extended to 12 months from now. */
+  addCredits?: number;
+}
+
+/**
+ * Admin: update workspace plan and/or add credits.
+ */
+export async function updateWorkspaceById(
+  workspaceId: string,
+  input: AdminUpdateWorkspaceInput
+): Promise<AdminWorkspaceDetail | null> {
+  const workspace = await WorkspaceModel.findById(workspaceId);
+  if (!workspace) return null;
+
+  const updates: Record<string, unknown> = {};
+
+  if (input.planStatus !== undefined) {
+    updates.planStatus = input.planStatus;
+    if (input.planStatus === "pro") {
+      updates.proCreditsPerMonth =
+        input.proCreditsPerMonth ?? workspace.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT;
+      // Admin grant: leave stripeSubscriptionId as-is if already set; otherwise leave unset
+    } else if (input.planStatus === "free") {
+      updates.stripeSubscriptionId = undefined;
+      updates.stripeSubscriptionInterval = undefined;
+      updates.proCreditsPerMonth = undefined;
+    }
+  } else if (input.proCreditsPerMonth !== undefined && workspace.planStatus === "pro") {
+    updates.proCreditsPerMonth = input.proCreditsPerMonth;
+  }
+
+  if (input.addCredits !== undefined && input.addCredits > 0) {
+    const current = workspace.topUpCreditsBalance ?? 0;
+    updates.topUpCreditsBalance = current + input.addCredits;
+    const twelveMonthsFromNow = new Date();
+    twelveMonthsFromNow.setUTCMonth(twelveMonthsFromNow.getUTCMonth() + 12);
+    const existingExpiry = workspace.topUpCreditsExpiresAt
+      ? new Date(workspace.topUpCreditsExpiresAt)
+      : null;
+    updates.topUpCreditsExpiresAt =
+      existingExpiry && existingExpiry > twelveMonthsFromNow
+        ? existingExpiry
+        : twelveMonthsFromNow;
+  }
+
+  if (Object.keys(updates).length === 0) return getWorkspaceById(workspaceId);
+
+  await WorkspaceModel.updateOne(
+    { _id: workspace._id },
+    { $set: updates }
+  );
+
+  return getWorkspaceById(workspaceId);
 }
 
 /**

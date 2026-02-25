@@ -10,6 +10,8 @@ export function emitChatAssistant(projectId: string, payload: {
   responseTimeSeconds?: number;
   createdAt: string;
   questionnaireMetadata?: unknown;
+  /** When set, frontend should show this questionnaire (inferred from AI response) */
+  requestQuestionnaire?: ChatMessage["requestQuestionnaire"];
 }): void {
   emitToProject(projectId, "chat:assistant", payload);
 }

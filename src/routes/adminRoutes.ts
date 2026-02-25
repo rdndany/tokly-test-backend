@@ -7,6 +7,7 @@ import {
   getUserById,
   getWorkspaces,
   getWorkspaceById,
+  patchWorkspace,
   getProjects,
   getProjectById,
   updateUserRole,
@@ -28,6 +29,7 @@ router.get("/dashboard/revenue-analytics", checkAdminAuth, getRevenueAnalytics);
 router.get("/users", checkAdminAuth, getUsers);
 router.get("/workspaces", checkAdminAuth, getWorkspaces);
 router.get("/workspaces/:workspaceId", checkAdminAuth, getWorkspaceById);
+router.patch("/workspaces/:workspaceId", checkAdminAuth, patchWorkspace);
 router.get("/projects", checkAdminAuth, getProjects);
 router.get("/projects/:projectId", checkAdminAuth, getProjectById);
 router.post("/projects/:projectId/refresh-token-details", checkAdminAuth, refreshProjectTokenDetailsHandler);
