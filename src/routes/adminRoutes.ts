@@ -20,6 +20,10 @@ import {
   getAllWithdrawalRequestsHandler,
   approveWithdrawalRequestHandler,
   rejectWithdrawalRequestHandler,
+  getAnnouncementsHandler,
+  createAnnouncementHandler,
+  updateAnnouncementHandler,
+  deleteAnnouncementHandler,
 } from "../controllers/AdminController";
 
 const router = Router();
@@ -40,6 +44,10 @@ router.get("/referrals/users", checkAdminAuth, getAllReferralUsersHandler);
 router.get("/referrals/withdrawals", checkAdminAuth, getAllWithdrawalRequestsHandler);
 router.post("/referrals/withdrawals/:requestId/approve", checkAdminAuth, approveWithdrawalRequestHandler);
 router.post("/referrals/withdrawals/:requestId/reject", checkAdminAuth, rejectWithdrawalRequestHandler);
+router.get("/announcements", checkAdminAuth, getAnnouncementsHandler);
+router.post("/announcements", checkAdminAuth, createAnnouncementHandler);
+router.patch("/announcements/:id", checkAdminAuth, updateAnnouncementHandler);
+router.delete("/announcements/:id", checkAdminAuth, deleteAnnouncementHandler);
 router.get("/users/:userId", checkAdminAuth, getUserById);
 router.patch("/users/:userId/role", checkAdminAuth, updateUserRole);
 router.delete("/users/:userId", checkAdminAuth, removeUser);

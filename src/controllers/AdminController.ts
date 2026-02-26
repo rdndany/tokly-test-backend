@@ -5,6 +5,7 @@ import type { AdminReferralStats } from "../services/adminService";
 import { getTokenUpdateLogs, clearTokenUpdateLogs } from "../services/tokenUpdateLogService";
 import { refreshProjectTokenDetailsForAdmin } from "../services/projectService";
 import { createLogger } from "../utils/logger";
+import * as AnnouncementService from "../services/announcementService";
 
 const logger = createLogger("AdminController");
 
@@ -353,5 +354,81 @@ export async function rejectWithdrawalRequestHandler(req: Request, res: Response
     logger.error("Error rejecting withdrawal request", error);
     const message = error instanceof Error ? error.message : "Failed to reject withdrawal request";
     res.status(HTTPSTATUS.BAD_REQUEST).json({ message });
+  }
+}
+
+export async function getAnnouncementsHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const list = await AnnouncementService.listAnnouncements();
+    res.status(HTTPSTATUS.OK).json(list);
+  } catch (error) {
+    logger.error("Error fetching announcements", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to fetch announcements" });
+  }
+}
+
+export async function createAnnouncementHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const body = req.body as AnnouncementService.AnnouncementPayload;
+    if (!body?.message?.trim()) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "message is required" });
+      return;
+    }
+    const created = await AnnouncementService.createAnnouncement({
+      message: body.message.trim(),
+      linkText: body.linkText?.trim(),
+      linkHref: body.linkHref?.trim(),
+      variant: body.variant,
+      active: body.active,
+    });
+    res.status(HTTPSTATUS.CREATED).json(created);
+  } catch (error) {
+    logger.error("Error creating announcement", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to create announcement" });
+  }
+}
+
+export async function updateAnnouncementHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const id = req.params.id;
+    const body = req.body as Partial<AnnouncementService.AnnouncementPayload>;
+    if (!id) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "id is required" });
+      return;
+    }
+    const payload: Partial<AnnouncementService.AnnouncementPayload> = {};
+    if (body.message !== undefined) payload.message = body.message.trim();
+    if (body.linkText !== undefined) payload.linkText = body.linkText?.trim() || undefined;
+    if (body.linkHref !== undefined) payload.linkHref = body.linkHref?.trim() || undefined;
+    if (body.variant !== undefined) payload.variant = body.variant;
+    if (body.active !== undefined) payload.active = body.active;
+    const updated = await AnnouncementService.updateAnnouncement(id, payload);
+    if (!updated) {
+      res.status(HTTPSTATUS.NOT_FOUND).json({ message: "Announcement not found" });
+      return;
+    }
+    res.status(HTTPSTATUS.OK).json(updated);
+  } catch (error) {
+    logger.error("Error updating announcement", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to update announcement" });
+  }
+}
+
+export async function deleteAnnouncementHandler(req: Request, res: Response): Promise<void> {
+  try {
+    const id = req.params.id;
+    if (!id) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "id is required" });
+      return;
+    }
+    const deleted = await AnnouncementService.deleteAnnouncement(id);
+    if (!deleted) {
+      res.status(HTTPSTATUS.NOT_FOUND).json({ message: "Announcement not found" });
+      return;
+    }
+    res.status(HTTPSTATUS.OK).json({ success: true });
+  } catch (error) {
+    logger.error("Error deleting announcement", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to delete announcement" });
   }
 }
