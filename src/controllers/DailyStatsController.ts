@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import * as dailyStatsService from "../services/dailyStatsService";
+import * as activeVisitorService from "../services/activeVisitorService";
 import { getProjectById } from "../services/projectService";
 import { HTTPSTATUS } from "../config/http.config";
 
@@ -84,5 +85,40 @@ export async function getTotalStats(req: Request, res: Response): Promise<void> 
     res.status(HTTPSTATUS.OK).json({ success: true, data });
   } catch {
     res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get total stats" });
+  }
+}
+
+export async function recordPresence(req: Request, res: Response): Promise<void> {
+  try {
+    const { projectId, visitorId } = req.body as { projectId?: string; visitorId?: string };
+    if (!projectId || !visitorId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({
+        success: false,
+        message: "projectId and visitorId are required",
+      });
+      return;
+    }
+    await activeVisitorService.recordPresence(projectId, visitorId);
+    res.status(HTTPSTATUS.OK).json({ success: true, data: { message: "Presence recorded" } });
+  } catch {
+    res.status(HTTPSTATUS.OK).json({ success: true, data: { message: "Presence recorded" } });
+  }
+}
+
+export async function getActiveCount(req: Request, res: Response): Promise<void> {
+  try {
+    const projectId = req.params.projectId;
+    if (!projectId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ success: false, message: "Project ID is required" });
+      return;
+    }
+    if (!req.auth?.userId) {
+      res.status(HTTPSTATUS.UNAUTHORIZED).json({ message: "Unauthorized" });
+      return;
+    }
+    const activeVisitors = await activeVisitorService.getActiveCount(projectId);
+    res.status(HTTPSTATUS.OK).json({ success: true, data: { activeVisitors } });
+  } catch {
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get active count" });
   }
 }

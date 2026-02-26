@@ -24,6 +24,12 @@ export interface BrowserStats {
   views: number;
 }
 
+export interface DailySessionStats {
+  date: string; // YYYY-MM-DD
+  avgSessionDuration: number;
+  bounceRate: number;
+}
+
 export interface GA4AnalyticsData {
   devices: DeviceStats[];
   countries: CountryStats[];
@@ -32,6 +38,7 @@ export interface GA4AnalyticsData {
   avgSessionDuration: number;
   bounceRate: number;
   newVsReturning: { newUsers: number; returningUsers: number };
+  dailySessionStats?: DailySessionStats[];
 }
 
 const PROJECT_ID_DIMENSION = "customEvent:project_id";
@@ -87,12 +94,13 @@ class GA4Service {
     if (!this.isReady() || !this.client) return null;
 
     try {
-      const [devices, countries, referrers, browsers, session] = await Promise.all([
+      const [devices, countries, referrers, browsers, session, dailySession] = await Promise.all([
         this.getDeviceStats(projectId, startDate, endDate),
         this.getCountryStats(projectId, startDate, endDate),
         this.getReferrerStats(projectId, startDate, endDate),
         this.getBrowserStats(projectId, startDate, endDate),
         this.getSessionStats(projectId, startDate, endDate),
+        this.getSessionStatsByDay(projectId, startDate, endDate),
       ]);
 
       return {
@@ -103,6 +111,7 @@ class GA4Service {
         avgSessionDuration: session.avgDuration,
         bounceRate: session.bounceRate,
         newVsReturning: session.newVsReturning,
+        dailySessionStats: dailySession,
       };
     } catch (err) {
       logger.error?.("Error fetching GA4 analytics", err);
@@ -387,6 +396,75 @@ class GA4Service {
       }
       logger.error?.("Error fetching session stats", err);
       return empty;
+    }
+  }
+
+  /** Returns session duration and bounce rate per day for the date range. */
+  private async getSessionStatsByDay(
+    projectId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<DailySessionStats[]> {
+    if (!this.client) return [];
+    try {
+      const [response] = await this.client.runReport({
+        property: `properties/${this.propertyId}`,
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: "date" }],
+        metrics: [
+          { name: "averageSessionDuration" },
+          { name: "bounceRate" },
+        ],
+        dimensionFilter: this.projectFilter(projectId),
+        orderBys: [{ dimension: { dimensionName: "date" } }],
+      });
+      return (response.rows ?? []).map((row) => {
+        const dateRaw = row.dimensionValues?.[0]?.value ?? "";
+        const yyyy = dateRaw.slice(0, 4);
+        const mm = dateRaw.slice(4, 6);
+        const dd = dateRaw.slice(6, 8);
+        const date = `${yyyy}-${mm}-${dd}`;
+        const avgDuration = parseFloat(row.metricValues?.[0]?.value ?? "0");
+        const bounceRate = parseFloat(row.metricValues?.[1]?.value ?? "0");
+        return {
+          date,
+          avgSessionDuration: Math.round(avgDuration),
+          bounceRate: Math.round(bounceRate * 100),
+        };
+      });
+    } catch (err) {
+      if (isInvalidArgument(err)) {
+        try {
+          const [response] = await this.client.runReport({
+            property: `properties/${this.propertyId}`,
+            dateRanges: [{ startDate, endDate }],
+            dimensions: [{ name: "date" }],
+            metrics: [
+              { name: "averageSessionDuration" },
+              { name: "bounceRate" },
+            ],
+            orderBys: [{ dimension: { dimensionName: "date" } }],
+          });
+          return (response.rows ?? []).map((row) => {
+            const dateRaw = row.dimensionValues?.[0]?.value ?? "";
+            const yyyy = dateRaw.slice(0, 4);
+            const mm = dateRaw.slice(4, 6);
+            const dd = dateRaw.slice(6, 8);
+            const date = `${yyyy}-${mm}-${dd}`;
+            const avgDuration = parseFloat(row.metricValues?.[0]?.value ?? "0");
+            const bounceRate = parseFloat(row.metricValues?.[1]?.value ?? "0");
+            return {
+              date,
+              avgSessionDuration: Math.round(avgDuration),
+              bounceRate: Math.round(bounceRate * 100),
+            };
+          });
+        } catch {
+          return [];
+        }
+      }
+      logger.error?.("Error fetching session stats by day", err);
+      return [];
     }
   }
 }

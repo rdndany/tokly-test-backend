@@ -10,6 +10,7 @@ const STUB_DATA = {
   avgSessionDuration: 0,
   bounceRate: 0,
   newVsReturning: { newUsers: 0, returningUsers: 0 },
+  dailySessionStats: [] as { date: string; avgSessionDuration: number; bounceRate: number }[],
 };
 
 export async function getGA4Analytics(req: Request, res: Response): Promise<void> {
