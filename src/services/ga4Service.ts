@@ -389,6 +389,34 @@ class GA4Service {
       return empty;
     }
   }
+
+  /**
+   * Get real-time active users (last ~30 min) for the GA4 property.
+   * Note: Realtime API does not support event-scoped custom dimensions, so this is property-level, not per-project.
+   */
+  async getRealtimeActiveUsers(): Promise<number | null> {
+    if (!this.isReady() || !this.client) return null;
+    try {
+      const [response] = await this.client.runRealtimeReport({
+        property: `properties/${this.propertyId}`,
+        metrics: [{ name: "activeUsers" }],
+      });
+      const totals = response.totals?.[0];
+      const value = totals?.metricValues?.[0]?.value;
+      if (value !== undefined && value !== null) {
+        return parseInt(String(value), 10) || 0;
+      }
+      const row = response.rows?.[0];
+      const rowValue = row?.metricValues?.[0]?.value;
+      if (rowValue !== undefined && rowValue !== null) {
+        return parseInt(String(rowValue), 10) || 0;
+      }
+      return 0;
+    } catch (err) {
+      logger.error?.("Error fetching GA4 realtime active users", err);
+      return null;
+    }
+  }
 }
 
 export const ga4Service = new GA4Service();

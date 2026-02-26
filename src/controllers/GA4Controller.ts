@@ -79,3 +79,29 @@ export async function getGA4Status(req: Request, res: Response): Promise<void> {
     res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get GA4 status" });
   }
 }
+
+/** GET /api/ga4/realtime – real-time active users (property-level; GA4 Realtime API). */
+export async function getGA4Realtime(req: Request, res: Response): Promise<void> {
+  try {
+    if (!req.auth?.userId) {
+      res.status(HTTPSTATUS.UNAUTHORIZED).json({ message: "Unauthorized" });
+      return;
+    }
+    if (!ga4Service.isReady()) {
+      res.status(HTTPSTATUS.OK).json({
+        success: true,
+        ga4Enabled: false,
+        activeUsers: null,
+      });
+      return;
+    }
+    const activeUsers = await ga4Service.getRealtimeActiveUsers();
+    res.status(HTTPSTATUS.OK).json({
+      success: true,
+      ga4Enabled: true,
+      activeUsers: activeUsers ?? null,
+    });
+  } catch {
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({ message: "Failed to get GA4 realtime" });
+  }
+}
