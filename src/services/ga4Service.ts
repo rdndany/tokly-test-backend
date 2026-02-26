@@ -30,6 +30,12 @@ export interface DailySessionStats {
   bounceRate: number;
 }
 
+export interface DailyTotals {
+  date: string; // YYYY-MM-DD
+  activeUsers: number;
+  screenPageViews: number;
+}
+
 export interface GA4AnalyticsData {
   devices: DeviceStats[];
   countries: CountryStats[];
@@ -38,7 +44,10 @@ export interface GA4AnalyticsData {
   avgSessionDuration: number;
   bounceRate: number;
   newVsReturning: { newUsers: number; returningUsers: number };
+  totalUsers: number;
+  totalScreenPageViews: number;
   dailySessionStats?: DailySessionStats[];
+  dailyTotals?: DailyTotals[];
 }
 
 const PROJECT_ID_DIMENSION = "customEvent:project_id";
@@ -94,13 +103,14 @@ class GA4Service {
     if (!this.isReady() || !this.client) return null;
 
     try {
-      const [devices, countries, referrers, browsers, session, dailySession] = await Promise.all([
+      const [devices, countries, referrers, browsers, session, dailySession, dailyTotals] = await Promise.all([
         this.getDeviceStats(projectId, startDate, endDate),
         this.getCountryStats(projectId, startDate, endDate),
         this.getReferrerStats(projectId, startDate, endDate),
         this.getBrowserStats(projectId, startDate, endDate),
         this.getSessionStats(projectId, startDate, endDate),
         this.getSessionStatsByDay(projectId, startDate, endDate),
+        this.getDailyTotals(projectId, startDate, endDate),
       ]);
 
       return {
@@ -111,7 +121,10 @@ class GA4Service {
         avgSessionDuration: session.avgDuration,
         bounceRate: session.bounceRate,
         newVsReturning: session.newVsReturning,
+        totalUsers: session.totalUsers,
+        totalScreenPageViews: session.totalScreenPageViews,
         dailySessionStats: dailySession,
+        dailyTotals,
       };
     } catch (err) {
       logger.error?.("Error fetching GA4 analytics", err);
@@ -338,11 +351,15 @@ class GA4Service {
     avgDuration: number;
     bounceRate: number;
     newVsReturning: { newUsers: number; returningUsers: number };
+    totalUsers: number;
+    totalScreenPageViews: number;
   }> {
     const empty = {
       avgDuration: 0,
       bounceRate: 0,
       newVsReturning: { newUsers: 0, returningUsers: 0 },
+      totalUsers: 0,
+      totalScreenPageViews: 0,
     };
     if (!this.client) return empty;
     try {
@@ -354,6 +371,7 @@ class GA4Service {
           { name: "bounceRate" },
           { name: "newUsers" },
           { name: "activeUsers" },
+          { name: "screenPageViews" },
         ],
         dimensionFilter: this.projectFilter(projectId),
       });
@@ -362,10 +380,13 @@ class GA4Service {
       const bounceRate = parseFloat(row?.metricValues?.[1]?.value ?? "0");
       const newUsers = parseInt(row?.metricValues?.[2]?.value ?? "0", 10);
       const activeUsers = parseInt(row?.metricValues?.[3]?.value ?? "0", 10);
+      const screenPageViews = parseInt(row?.metricValues?.[4]?.value ?? "0", 10);
       return {
         avgDuration: Math.round(avgDuration),
         bounceRate: Math.round(bounceRate * 100),
         newVsReturning: { newUsers, returningUsers: Math.max(0, activeUsers - newUsers) },
+        totalUsers: activeUsers,
+        totalScreenPageViews: screenPageViews,
       };
     } catch (err) {
       if (isInvalidArgument(err)) {
@@ -378,6 +399,7 @@ class GA4Service {
               { name: "bounceRate" },
               { name: "newUsers" },
               { name: "activeUsers" },
+              { name: "screenPageViews" },
             ],
           });
           const row = response.rows?.[0];
@@ -385,10 +407,13 @@ class GA4Service {
           const bounceRate = parseFloat(row?.metricValues?.[1]?.value ?? "0");
           const newUsers = parseInt(row?.metricValues?.[2]?.value ?? "0", 10);
           const activeUsers = parseInt(row?.metricValues?.[3]?.value ?? "0", 10);
+          const screenPageViews = parseInt(row?.metricValues?.[4]?.value ?? "0", 10);
           return {
             avgDuration: Math.round(avgDuration),
             bounceRate: Math.round(bounceRate * 100),
             newVsReturning: { newUsers, returningUsers: Math.max(0, activeUsers - newUsers) },
+            totalUsers: activeUsers,
+            totalScreenPageViews: screenPageViews,
           };
         } catch {
           return empty;
@@ -396,6 +421,61 @@ class GA4Service {
       }
       logger.error?.("Error fetching session stats", err);
       return empty;
+    }
+  }
+
+  /** Returns activeUsers and screenPageViews per day for the date range. */
+  private async getDailyTotals(
+    projectId: string,
+    startDate: string,
+    endDate: string
+  ): Promise<DailyTotals[]> {
+    if (!this.client) return [];
+    try {
+      const [response] = await this.client.runReport({
+        property: `properties/${this.propertyId}`,
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: "date" }],
+        metrics: [{ name: "activeUsers" }, { name: "screenPageViews" }],
+        dimensionFilter: this.projectFilter(projectId),
+        orderBys: [{ dimension: { dimensionName: "date" } }],
+      });
+      return (response.rows ?? []).map((row) => {
+        const dateRaw = row.dimensionValues?.[0]?.value ?? "";
+        const yyyy = dateRaw.slice(0, 4);
+        const mm = dateRaw.slice(4, 6);
+        const dd = dateRaw.slice(6, 8);
+        const date = `${yyyy}-${mm}-${dd}`;
+        const activeUsers = parseInt(row.metricValues?.[0]?.value ?? "0", 10);
+        const screenPageViews = parseInt(row.metricValues?.[1]?.value ?? "0", 10);
+        return { date, activeUsers, screenPageViews };
+      });
+    } catch (err) {
+      if (isInvalidArgument(err)) {
+        try {
+          const [response] = await this.client.runReport({
+            property: `properties/${this.propertyId}`,
+            dateRanges: [{ startDate, endDate }],
+            dimensions: [{ name: "date" }],
+            metrics: [{ name: "activeUsers" }, { name: "screenPageViews" }],
+            orderBys: [{ dimension: { dimensionName: "date" } }],
+          });
+          return (response.rows ?? []).map((row) => {
+            const dateRaw = row.dimensionValues?.[0]?.value ?? "";
+            const yyyy = dateRaw.slice(0, 4);
+            const mm = dateRaw.slice(4, 6);
+            const dd = dateRaw.slice(6, 8);
+            const date = `${yyyy}-${mm}-${dd}`;
+            const activeUsers = parseInt(row.metricValues?.[0]?.value ?? "0", 10);
+            const screenPageViews = parseInt(row.metricValues?.[1]?.value ?? "0", 10);
+            return { date, activeUsers, screenPageViews };
+          });
+        } catch {
+          return [];
+        }
+      }
+      logger.error?.("Error fetching daily totals", err);
+      return [];
     }
   }
 
