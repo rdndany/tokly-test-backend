@@ -1514,7 +1514,7 @@ export async function updateProjectSocialLinks(
   };
 }
 
-const VALID_TEMPLATE_IDS = ["aurora", "minimal", "cobalt"] as const;
+const VALID_TEMPLATE_IDS = ["aurora", "minimal", "cobalt", "zynex"] as const;
 
 const VALID_AURORA_COLOR_SCHEMA_IDS = [
   "default",
@@ -1537,6 +1537,32 @@ const VALID_AURORA_COLOR_SCHEMA_IDS = [
   "aurora-shadow-blue",
   "aurora-void-black",
   "aurora-obsidian-gray",
+] as const;
+
+const VALID_ZYNEX_COLOR_SCHEMA_IDS = [
+  "default",
+  "zynex-green-blue",
+  "zynex-red-orange",
+  "zynex-blue-cyan",
+  "zynex-yellow-amber",
+  "zynex-purple-pink",
+  "zynex-cyan-teal",
+  "zynex-indigo-violet",
+  "zynex-emerald-lime",
+  "zynex-rose-coral",
+  "zynex-sky-ocean",
+  "zynex-orange-pink",
+  "zynex-teal-magenta",
+  "zynex-gold-purple",
+  "zynex-lime-cyan",
+  "zynex-coral-blue",
+  "zynex-mint-indigo",
+  "zynex-amber-violet",
+  "zynex-slate-blue",
+  "zynex-fuchsia-cyan",
+  "zynex-forest-turquoise",
+  "zynex-crimson-sapphire",
+  "zynex-dark-shadow",
 ] as const;
 
 const VALID_FONT_IDS = [
@@ -1578,7 +1604,12 @@ export async function updateProjectTemplate(
   }
   if (input.colorSchemaId != null) {
     const schemaId = input.colorSchemaId.trim();
-    if (schemaId && VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number])) {
+    const isValidSchema =
+      schemaId &&
+      (templateId === "zynex"
+        ? VALID_ZYNEX_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_ZYNEX_COLOR_SCHEMA_IDS)[number])
+        : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
+    if (isValidSchema) {
       setFields.colorSchemaId = schemaId;
     } else {
       unsetFields.colorSchemaId = 1;
