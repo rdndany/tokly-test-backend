@@ -93,7 +93,7 @@ function inferRequestQuestionnaireFromAssistantContent(
 }
 
 const HELPFUL_IDEAS_RECOMMENDATION =
-  "Try picking a helpful idea below – for example, Choose Template – to get started.";
+  "Try picking a helpful idea below to get started.";
 
 /** Cost in credits from OpenAI usage: 0.5 for smaller responses, 1 for larger. */
 function creditCostFromUsage(usage?: {
