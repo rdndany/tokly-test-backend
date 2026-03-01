@@ -1563,6 +1563,11 @@ const VALID_ZYNEX_COLOR_SCHEMA_IDS = [
   "zynex-forest-turquoise",
   "zynex-crimson-sapphire",
   "zynex-dark-shadow",
+  "zynex-electric-blue",
+  "zynex-sunset-glow",
+  "zynex-midnight-emerald",
+  "zynex-arctic-violet",
+  "zynex-inferno",
 ] as const;
 
 const VALID_FONT_IDS = [
