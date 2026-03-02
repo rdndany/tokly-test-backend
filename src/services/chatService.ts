@@ -78,7 +78,7 @@ function inferRequestQuestionnaireFromAssistantContent(
   if (/\broadmap\b|phases?\s+and\s+milestones?/.test(lower)) return "roadmap";
   if (/\btokenomics\b|total\s+supply|token\s+allocations?/.test(lower)) return "tokenomics";
   if (/\btemplate\s+style\b|template\s+design|color\s+theme|color\s+scheme|\bfonts?\b/.test(lower)) return "template-style";
-  if (/\btemplate\s+layout\b|choose\s+template\b|\b(aurora|minimal|cobalt)\b/.test(lower)) return "template";
+  if (/\btemplate\s+layout\b|choose\s+template\b|\b(aurora|minimal|cobalt|zynex|brick[- ]?rise)\b/.test(lower)) return "template";
   if (/\btemplate\b/.test(lower)) return "template";
   if (/\baudit\b|kyc\b|audit\s+report/.test(lower)) return "audit-kyc";
   if (/\blisting\s+platforms?|vote\s+listing/.test(lower)) return "listing-platforms";

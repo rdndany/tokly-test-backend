@@ -1514,7 +1514,7 @@ export async function updateProjectSocialLinks(
   };
 }
 
-const VALID_TEMPLATE_IDS = ["aurora", "minimal", "cobalt", "zynex"] as const;
+const VALID_TEMPLATE_IDS = ["aurora", "minimal", "cobalt", "zynex", "brick-rise"] as const;
 
 const VALID_AURORA_COLOR_SCHEMA_IDS = [
   "default",
@@ -1570,6 +1570,40 @@ const VALID_ZYNEX_COLOR_SCHEMA_IDS = [
   "zynex-inferno",
 ] as const;
 
+const VALID_BRICK_RISE_COLOR_SCHEMA_IDS = [
+  "clover-lavender",
+  "violet-hour",
+  "golden-hour",
+  "tide-pool",
+  "ember",
+  "canopy",
+  "crown",
+  "synthwave",
+  "sugar-rush",
+  "after-dark",
+  "daybreak",
+  "borealis",
+  "nebula",
+  "arcade",
+  "andromeda",
+  "sage-stone",
+  "peach-fuzz",
+  "lavender-haze",
+  "cherry-blossom",
+  "desert-sun",
+  "frost",
+  "honey",
+  "rose-gold",
+  "mango-lime",
+  "slate-mist",
+  "coral-reef",
+  "meadow",
+  "sunset-drive",
+  "slate",
+  "charcoal",
+  "obsidian",
+] as const;
+
 const VALID_FONT_IDS = [
   "poppins", "rubik", "unbounded", "roboto", "montserrat", "quicksand",
   "kanit", "pixelify-sans", "bangers", "barriecito", "chewy", "itim",
@@ -1613,7 +1647,9 @@ export async function updateProjectTemplate(
       schemaId &&
       (templateId === "zynex"
         ? VALID_ZYNEX_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_ZYNEX_COLOR_SCHEMA_IDS)[number])
-        : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
+        : templateId === "brick-rise"
+          ? VALID_BRICK_RISE_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_BRICK_RISE_COLOR_SCHEMA_IDS)[number])
+          : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
     if (isValidSchema) {
       setFields.colorSchemaId = schemaId;
     } else {
