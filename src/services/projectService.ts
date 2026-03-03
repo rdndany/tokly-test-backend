@@ -1514,7 +1514,7 @@ export async function updateProjectSocialLinks(
   };
 }
 
-const VALID_TEMPLATE_IDS = ["aurora", "minimal", "cobalt", "zynex", "brick-rise", "horizon-elite"] as const;
+const VALID_TEMPLATE_IDS = ["aurora", "zynex", "brick-rise", "horizon-elite"] as const;
 
 const VALID_AURORA_COLOR_SCHEMA_IDS = [
   "default",
