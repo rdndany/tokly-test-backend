@@ -1514,7 +1514,7 @@ export async function updateProjectSocialLinks(
   };
 }
 
-const VALID_TEMPLATE_IDS = ["aurora", "zynex", "brick-rise", "horizon-elite"] as const;
+const VALID_TEMPLATE_IDS = ["aurora", "zynex", "brick-rise", "horizon-elite", "apex"] as const;
 
 const VALID_AURORA_COLOR_SCHEMA_IDS = [
   "default",
@@ -1625,6 +1625,29 @@ const VALID_HORIZON_ELITE_COLOR_SCHEMA_IDS = [
   "slime-green",
 ] as const;
 
+const VALID_APEX_COLOR_SCHEMA_IDS = [
+  "apex-pink-purple-yellow",
+  "apex-blue-ocean",
+  "apex-sunshine-yellow",
+  "apex-forest-green",
+  "apex-void-black",
+  "apex-fire-red",
+  "apex-sunset-orange",
+  "apex-royal-purple",
+  "apex-cyan-tide",
+  "apex-rose-gold",
+  "apex-indigo-night",
+  "apex-coral-reef",
+  "apex-lime-burst",
+  "apex-amber-glow",
+  "apex-teal-wave",
+  "apex-magenta-pulse",
+  "apex-emerald-shine",
+  "apex-violet-dream",
+  "apex-peach-sunrise",
+  "apex-mint-fresh",
+] as const;
+
 const VALID_FONT_IDS = [
   "poppins", "rubik", "unbounded", "roboto", "montserrat", "quicksand",
   "kanit", "pixelify-sans", "bangers", "barriecito", "chewy", "itim",
@@ -1672,7 +1695,9 @@ export async function updateProjectTemplate(
           ? VALID_BRICK_RISE_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_BRICK_RISE_COLOR_SCHEMA_IDS)[number])
           : templateId === "horizon-elite"
             ? VALID_HORIZON_ELITE_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_HORIZON_ELITE_COLOR_SCHEMA_IDS)[number])
-            : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
+            : templateId === "apex"
+              ? VALID_APEX_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_APEX_COLOR_SCHEMA_IDS)[number])
+              : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
     if (isValidSchema) {
       setFields.colorSchemaId = schemaId;
     } else {

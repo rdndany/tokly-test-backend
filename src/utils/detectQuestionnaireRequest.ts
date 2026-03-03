@@ -46,8 +46,8 @@ const TEMPLATE_LAYOUT_PATTERNS = [
   /\b(change|switch|pick)\s+(the\s+)?(entire\s+)?(template\s+)?layout\b/i,
   /\b(change|switch)\s+(the\s+)?(whole|entire)\s+template\b/i,
   /\b(different|another)\s+template\s*(layout)?\b/i,
-  /\b(aurora|zynex|brick[- ]?rise|horizon[- ]?elite)\s*$/i,
-  /\b(change|switch)\s+to\s+(aurora|zynex|brick[- ]?rise|horizon[- ]?elite)\b/i,
+  /\b(aurora|zynex|brick[- ]?rise|horizon[- ]?elite|apex)\s*$/i,
+  /\b(change|switch)\s+to\s+(aurora|zynex|brick[- ]?rise|horizon[- ]?elite|apex)\b/i,
   /\btemplate\s+layout\b/i,
   /\b(the\s+)?layout\b/i,
   /\b(change|update)\s+(the\s+)?layout\b/i,
@@ -310,7 +310,7 @@ function inferQuestionnaireFromContext(
   // Template clarification: last message asked layout vs style
   if (/\btemplate\b/.test(lower) && (/\blayout\b/.test(lower) || /\bstyle(s)?\b/.test(lower) || /\bcolors?\b/.test(lower) || /\bfonts?\b/.test(lower))) {
     const userLower = userMessage.toLowerCase().trim();
-    if (/\blayout\b|^\s*(the\s+)?layout\s*$|entire|whole\s+template|different\s+template|aurora|zynex|brick[- ]?rise|horizon[- ]?elite/i.test(userLower)) {
+    if (/\blayout\b|^\s*(the\s+)?layout\s*$|entire|whole\s+template|different\s+template|aurora|zynex|brick[- ]?rise|horizon[- ]?elite|apex/i.test(userLower)) {
       return "template";
     }
     if (/\bstyle\b|styles|color|colors|font|fonts|theme\b/i.test(userLower)) {
