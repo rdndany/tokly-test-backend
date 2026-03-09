@@ -1107,6 +1107,31 @@ export async function updateSectionVisibility(
     body.sectionOrder && typeof body.sectionOrder === "object"
       ? body.sectionOrder
       : undefined;
+
+  if (sectionVisibility.whitelist === true) {
+    try {
+      const project = await getProjectById(projectId);
+      if (project) {
+        await ensureUserCanEditProjectService(userId, project);
+        const workspaceId = project.workspaceId?.toString();
+        if (workspaceId) {
+          const planStatus = await getWorkspacePlanStatus(workspaceId);
+          if (planStatus !== "pro") {
+            res.status(403).json({
+              error: "Pro plan is required to enable the Whitelist section.",
+            });
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Forbidden";
+      const status = msg === "Project not found" ? 404 : 403;
+      res.status(status).json({ error: msg });
+      return;
+    }
+  }
+
   try {
     const project = await updateSectionVisibilityService(userId, projectId, {
       sectionVisibility,
@@ -1678,8 +1703,8 @@ export async function addWhitelistEntry(req: Request, res: Response): Promise<vo
     }
     await ensureUserCanEditProjectService(userId, project);
     const { addWhitelistEntry: addEntry } = await import("../services/whitelistService");
-    const { entries } = await addEntry(projectId, address);
-    res.status(200).json({ entries });
+    const { entries, alreadyWhitelisted } = await addEntry(projectId, address);
+    res.status(200).json({ entries, alreadyWhitelisted });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to add whitelist entry";
     const status =
