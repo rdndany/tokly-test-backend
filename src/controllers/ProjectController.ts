@@ -1568,3 +1568,158 @@ export async function updateTokenDetails(
       "Provide (address and chain), (name and symbol), (logo), (dexUrl), (tokenFeatures), (description), or (heroText)",
   });
 }
+
+/** GET /api/projects/:projectId/whitelist – list whitelist entries (auth, can edit). */
+export async function getWhitelist(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { getWhitelistEntries } = await import("../services/whitelistService");
+    const entries = await getWhitelistEntries(projectId);
+    res.status(200).json({ entries });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to get whitelist";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** POST /api/projects/:projectId/whitelist/submit – public, submit address for whitelist (no auth). */
+export async function submitWhitelistEntry(req: Request, res: Response): Promise<void> {
+  const projectId = req.params.projectId;
+  const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const chain = (project.tokenDetails as { chain?: string } | undefined)?.chain?.toLowerCase() ?? "";
+    const isSolana = chain === "solana" || chain === "sol";
+    const isEvm = /^0x[a-fA-F0-9]{40}$/.test(address);
+    const isSolanaAddr = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
+    if (isSolana && !isSolanaAddr) {
+      res.status(400).json({ error: "Invalid Solana address for this project" });
+      return;
+    }
+    if (!isSolana && !isEvm) {
+      res.status(400).json({ error: "Invalid EVM address (use 0x + 40 hex characters)" });
+      return;
+    }
+    if (!isSolana && isSolanaAddr) {
+      res.status(400).json({ error: "This project uses an EVM chain; use an EVM wallet address" });
+      return;
+    }
+    const { addWhitelistEntry: addEntry } = await import("../services/whitelistService");
+    const { entries, alreadyWhitelisted } = await addEntry(projectId, address);
+    res.status(200).json({ entries, alreadyWhitelisted });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to submit whitelist entry";
+    res.status(500).json({ error: msg });
+  }
+}
+
+/** GET /api/projects/:projectId/whitelist/check?address=0x... – public, is address whitelisted? */
+export async function checkWhitelist(req: Request, res: Response): Promise<void> {
+  const projectId = req.params.projectId;
+  const address = typeof req.query?.address === "string" ? req.query.address.trim() : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const { getWhitelistEntries } = await import("../services/whitelistService");
+    const entries = await getWhitelistEntries(projectId);
+    const normalized = address.startsWith("0x") ? address.toLowerCase() : address;
+    const whitelisted = entries.some((e) => e.address === normalized);
+    res.status(200).json({ whitelisted });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to check whitelist" });
+  }
+}
+
+/** POST /api/projects/:projectId/whitelist – add address (auth, can edit, Pro plan). */
+export async function addWhitelistEntry(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { addWhitelistEntry: addEntry } = await import("../services/whitelistService");
+    const { entries } = await addEntry(projectId, address);
+    res.status(200).json({ entries });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to add whitelist entry";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** DELETE /api/projects/:projectId/whitelist – remove address (auth, can edit, Pro plan). */
+export async function removeWhitelistEntry(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const address =
+    typeof req.body?.address === "string"
+      ? req.body.address.trim()
+      : typeof req.query?.address === "string"
+        ? req.query.address.trim()
+        : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { removeWhitelistEntry: removeEntry } = await import("../services/whitelistService");
+    const entries = await removeEntry(projectId, address);
+    res.status(200).json({ entries });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to remove whitelist entry";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}

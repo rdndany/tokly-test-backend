@@ -37,6 +37,11 @@ import {
   updateAuditKyc,
   updateListingPlatforms,
   updateTokenDetails,
+  getWhitelist,
+  checkWhitelist,
+  submitWhitelistEntry,
+  addWhitelistEntry,
+  removeWhitelistEntry,
 } from "../controllers/ProjectController";
 import {
   chat,
@@ -99,5 +104,10 @@ router.post("/:projectId/chat/feedback", checkAuth, submitFeedback);
 router.delete("/:projectId/chat/feedback", checkAuth, removeFeedback);
 router.get("/:projectId/files", checkAuth, getFiles);
 router.put("/:projectId/files", checkAuth, putFile);
+router.get("/:projectId/whitelist/check", checkWhitelist); // Public – no auth
+router.post("/:projectId/whitelist/submit", submitWhitelistEntry); // Public – no auth, submit address
+router.get("/:projectId/whitelist", checkAuth, getWhitelist);
+router.post("/:projectId/whitelist", checkAuth, addWhitelistEntry);
+router.delete("/:projectId/whitelist", checkAuth, removeWhitelistEntry);
 
 export default router;

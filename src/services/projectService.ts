@@ -1741,7 +1741,7 @@ export async function updateProjectTemplate(
   };
 }
 
-const VALID_SECTION_IDS = ["hero", "about", "tokenomics", "roadmap", "faq", "team", "live-chart", "how-to-buy", "join-community"] as const;
+const VALID_SECTION_IDS = ["hero", "about", "tokenomics", "roadmap", "faq", "team", "live-chart", "how-to-buy", "join-community", "whitelist"] as const;
 
 export async function updateProjectSectionVisibility(
   userId: string,

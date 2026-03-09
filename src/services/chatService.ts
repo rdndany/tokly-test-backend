@@ -153,6 +153,7 @@ function buildProjectContext(project: {
   templateId?: string | null;
   fontFamily?: string | null;
   colorSchemaId?: string | null;
+  sectionVisibility?: Record<string, boolean> | null;
   sectionCustomization?: Record<string, { layout?: { type?: string } }> | null;
   tokenDetails?: {
     address?: string;
@@ -204,6 +205,8 @@ function buildProjectContext(project: {
     lines.push(`- Listing platforms: ${parts.join("; ")}`);
   }
   if (project.templateId) lines.push(`- Template: ${project.templateId}`);
+  const whitelistVisible = project.sectionVisibility?.whitelist === true;
+  lines.push(`- Whitelist section (requires PRO plan to enable): ${whitelistVisible ? "enabled" : "not enabled"}. Users can enable it in the Sections tab.`);
   const sectionCustomization = project.sectionCustomization;
   if (sectionCustomization && typeof sectionCustomization === "object" && Object.keys(sectionCustomization).length > 0) {
     const sectionLabels: Record<string, string> = {
@@ -216,6 +219,7 @@ function buildProjectContext(project: {
       "live-chart": "Live chart",
       "how-to-buy": "How to buy",
       "join-community": "Join community",
+      whitelist: "Whitelist",
     };
     const parts = Object.entries(sectionCustomization)
       .filter(([, v]) => v?.layout?.type)
@@ -310,6 +314,7 @@ RULES:
 
 CRITICAL - HONESTY AND CAPABILITIES:
 - Only these actions have a form/questionnaire that can open: description, logo, social links, template (choose Aurora, Zynex, Brick Rise, or Horizon Elite), template style (colors and fonts), audit/KYC, listing platforms, tokenomics, roadmap, FAQ, team, token details (address, name/symbol), token features. For ANY other request (e.g. "update visuals", "edit graphics", "change images", "edit hero text"), do NOT say "a form will appear" or "use the form that will appear" – there is no form for those. Either direct the user to the correct place in the app or say you can't do that from chat.
+- Whitelist section: The Whitelist section is available for all templates. It lets visitors paste their wallet address (EVM or Solana, depending on the project's token chain) and submit to be added to a whitelist; addresses are stored and can be managed in the Sections tab. Enabling the Whitelist section requires a PRO plan for the workspace. There is no chat form for it. When the user asks to add a whitelist, create a whitelist, or enable whitelist: tell them to go to the Sections tab, find "Whitelist Section", and turn it on; and mention that enabling the Whitelist section requires a PRO plan. Do NOT say the whitelist is only for a specific template – it is available for all templates.
 - When the user asks to edit hero text, tagline, or hero one-liner: tell them "You can edit the hero text in the General tab. Open the project sidebar and go to the General tab to update the tagline." Do NOT say a form will appear.
 - When the user asks to update visuals, graphics, or images (and they do not mean logo): there is no questionnaire for that. Say you can't update those from chat and suggest they use the Design or relevant section of the project editor. Do NOT say a form will appear.
 - When you cannot do something, say so directly. Do NOT suggest "say X and I'll open a form" except for the actions listed above that actually have forms.
