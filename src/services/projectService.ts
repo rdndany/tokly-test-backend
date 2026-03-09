@@ -1832,6 +1832,40 @@ export async function updateProjectSectionLayout(
   return updated;
 }
 
+type SectionCustomizationValue = { layout?: { type?: string }; customText?: string };
+
+export async function updateWhitelistSectionContent(
+  userId: string,
+  projectId: string,
+  customText: string | null
+): Promise<NonNullable<Awaited<ReturnType<typeof getProjectById>>>> {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  await ensureUserCanEditProject(userId, project);
+
+  const existing = (project as { sectionCustomization?: Record<string, SectionCustomizationValue> }).sectionCustomization ?? {};
+  const sectionCustomization = { ...existing };
+  const existingWhitelist = (sectionCustomization.whitelist ?? {}) as SectionCustomizationValue;
+  const hasContent = customText != null && String(customText).trim() !== "";
+  sectionCustomization.whitelist = {
+    ...existingWhitelist,
+    ...(hasContent ? { customText: String(customText).trim() } : {}),
+  };
+  if (!hasContent && (sectionCustomization.whitelist as SectionCustomizationValue).customText !== undefined) {
+    delete (sectionCustomization.whitelist as SectionCustomizationValue).customText;
+  }
+
+  await ProjectModel.updateOne(
+    { _id: projectId },
+    { $set: { sectionCustomization } }
+  );
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  logProjectChange(projectId, userId, "Updated whitelist section content", "sections");
+  emitProjectUpdated(projectId);
+  return updated;
+}
+
 export interface TokenAllocationInput {
   id: string;
   name: string;

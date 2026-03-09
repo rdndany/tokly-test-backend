@@ -38,6 +38,7 @@ import {
   updateProjectTemplate as updateTemplateService,
   updateProjectSectionVisibility as updateSectionVisibilityService,
   updateProjectSectionLayout as updateSectionLayoutService,
+  updateWhitelistSectionContent as updateWhitelistSectionContentService,
   updateProjectTokenomics as updateTokenomicsService,
   updateProjectRoadmap as updateRoadmapService,
   updateProjectFAQ as updateFAQService,
@@ -1185,6 +1186,44 @@ export async function updateSectionLayout(
   }
 }
 
+export async function updateWhitelistSectionContent(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const customText =
+    req.body?.customText === undefined
+      ? undefined
+      : req.body?.customText === null
+        ? null
+        : typeof req.body?.customText === "string"
+          ? req.body.customText
+          : undefined;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  if (customText === undefined) {
+    res.status(400).json({ error: "customText is required (string or null)" });
+    return;
+  }
+  try {
+    const project = await updateWhitelistSectionContentService(userId, projectId, customText);
+    res.status(200).json(project);
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : "Failed to update whitelist section content";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
 export async function updateTokenomics(
   req: Request,
   res: Response
@@ -1613,9 +1652,9 @@ export async function getWhitelist(req: Request, res: Response): Promise<void> {
       return;
     }
     await ensureUserCanEditProjectService(userId, project);
-    const { getWhitelistEntries } = await import("../services/whitelistService");
-    const entries = await getWhitelistEntries(projectId);
-    res.status(200).json({ entries });
+    const { getWhitelistData } = await import("../services/whitelistService");
+    const data = await getWhitelistData(projectId);
+    res.status(200).json({ lists: data.lists });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to get whitelist";
     const status =
@@ -1655,7 +1694,7 @@ export async function submitWhitelistEntry(req: Request, res: Response): Promise
       return;
     }
     const { addWhitelistEntry: addEntry } = await import("../services/whitelistService");
-    const { entries, alreadyWhitelisted } = await addEntry(projectId, address);
+    const { entries, alreadyWhitelisted } = await addEntry(projectId, address, "default");
     res.status(200).json({ entries, alreadyWhitelisted });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to submit whitelist entry";
@@ -1672,8 +1711,8 @@ export async function checkWhitelist(req: Request, res: Response): Promise<void>
     return;
   }
   try {
-    const { getWhitelistEntries } = await import("../services/whitelistService");
-    const entries = await getWhitelistEntries(projectId);
+    const { getDefaultListEntries } = await import("../services/whitelistService");
+    const entries = await getDefaultListEntries(projectId);
     const normalized = address.startsWith("0x") ? address.toLowerCase() : address;
     const whitelisted = entries.some((e) => e.address === normalized);
     res.status(200).json({ whitelisted });
@@ -1691,6 +1730,7 @@ export async function addWhitelistEntry(req: Request, res: Response): Promise<vo
   }
   const projectId = req.params.projectId;
   const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+  const listId = typeof req.body?.listId === "string" ? req.body.listId.trim() || "default" : "default";
   if (!projectId || !address) {
     res.status(400).json({ error: "Project ID and address are required" });
     return;
@@ -1703,7 +1743,7 @@ export async function addWhitelistEntry(req: Request, res: Response): Promise<vo
     }
     await ensureUserCanEditProjectService(userId, project);
     const { addWhitelistEntry: addEntry } = await import("../services/whitelistService");
-    const { entries, alreadyWhitelisted } = await addEntry(projectId, address);
+    const { entries, alreadyWhitelisted } = await addEntry(projectId, address, listId);
     res.status(200).json({ entries, alreadyWhitelisted });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to add whitelist entry";
@@ -1727,6 +1767,12 @@ export async function removeWhitelistEntry(req: Request, res: Response): Promise
       : typeof req.query?.address === "string"
         ? req.query.address.trim()
         : "";
+  const listId =
+    typeof req.body?.listId === "string"
+      ? req.body.listId.trim() || "default"
+      : typeof req.query?.listId === "string"
+        ? req.query.listId.trim() || "default"
+        : "default";
   if (!projectId || !address) {
     res.status(400).json({ error: "Project ID and address are required" });
     return;
@@ -1739,12 +1785,106 @@ export async function removeWhitelistEntry(req: Request, res: Response): Promise
     }
     await ensureUserCanEditProjectService(userId, project);
     const { removeWhitelistEntry: removeEntry } = await import("../services/whitelistService");
-    const entries = await removeEntry(projectId, address);
+    const entries = await removeEntry(projectId, address, listId);
     res.status(200).json({ entries });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to remove whitelist entry";
     const status =
       msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** POST /api/projects/:projectId/whitelist/lists – create new whitelist (auth, can edit). */
+export async function createWhitelistList(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { createWhitelistList: createList } = await import("../services/whitelistService");
+    const list = await createList(projectId, name || "Unnamed list");
+    res.status(201).json(list);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to create whitelist";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** PATCH /api/projects/:projectId/whitelist/lists/:listId – update whitelist name (auth, can edit). */
+export async function updateWhitelistListName(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const listId = req.params.listId;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!projectId || !listId) {
+    res.status(400).json({ error: "Project ID and list ID are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { updateWhitelistListName: updateName } = await import("../services/whitelistService");
+    const list = await updateName(projectId, listId, name);
+    res.status(200).json(list);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to update whitelist name";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Whitelist not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** DELETE /api/projects/:projectId/whitelist/lists/:listId – delete whitelist and all its entries (auth, can edit). */
+export async function deleteWhitelistList(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const listId = req.params.listId;
+  if (!projectId || !listId) {
+    res.status(400).json({ error: "Project ID and list ID are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { deleteWhitelistList: deleteList } = await import("../services/whitelistService");
+    const data = await deleteList(projectId, listId);
+    res.status(200).json({ lists: data.lists });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to delete whitelist";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Whitelist not found" ? 404 : msg === "Forbidden" ? 403 : 500;
     res.status(status).json({ error: msg });
   }
 }

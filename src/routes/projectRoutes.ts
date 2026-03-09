@@ -30,6 +30,7 @@ import {
   updateTemplate,
   updateSectionVisibility,
   updateSectionLayout,
+  updateWhitelistSectionContent,
   updateTokenomics,
   updateRoadmap,
   updateFAQ,
@@ -42,6 +43,9 @@ import {
   submitWhitelistEntry,
   addWhitelistEntry,
   removeWhitelistEntry,
+  createWhitelistList,
+  updateWhitelistListName,
+  deleteWhitelistList,
 } from "../controllers/ProjectController";
 import {
   chat,
@@ -91,6 +95,7 @@ router.patch("/:projectId/social-links", checkAuth, updateSocialLinks);
 router.patch("/:projectId/template", checkAuth, updateTemplate);
 router.patch("/:projectId/section-visibility", checkAuth, updateSectionVisibility);
 router.patch("/:projectId/section-layout", checkAuth, updateSectionLayout);
+router.patch("/:projectId/whitelist-section-content", checkAuth, updateWhitelistSectionContent);
 router.patch("/:projectId/tokenomics", checkAuth, updateTokenomics);
 router.patch("/:projectId/roadmap", checkAuth, updateRoadmap);
 router.patch("/:projectId/faq", checkAuth, updateFAQ);
@@ -109,5 +114,8 @@ router.post("/:projectId/whitelist/submit", submitWhitelistEntry); // Public –
 router.get("/:projectId/whitelist", checkAuth, getWhitelist);
 router.post("/:projectId/whitelist", checkAuth, addWhitelistEntry);
 router.delete("/:projectId/whitelist", checkAuth, removeWhitelistEntry);
+router.post("/:projectId/whitelist/lists", checkAuth, createWhitelistList);
+router.patch("/:projectId/whitelist/lists/:listId", checkAuth, updateWhitelistListName);
+router.delete("/:projectId/whitelist/lists/:listId", checkAuth, deleteWhitelistList);
 
 export default router;
