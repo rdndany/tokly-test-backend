@@ -239,6 +239,25 @@ export async function getProjectById(projectId: string) {
   if (!project) return null;
   const tokenDetails = project.tokenDetails;
   const socialLinks = migrateSocialLinks(project.socialLinks);
+  type AirdropConfigRaw = {
+    contractAddress?: string;
+    contractOwner?: string;
+    chain?: string;
+    taskType?: string;
+    status?: string;
+    distribution?: unknown;
+    distributionInS3?: boolean;
+    eligibilityTasks?: Array<{ type: string; url?: string; label?: string }>;
+    participationRequirements?: Array<Record<string, unknown>>;
+    solanaAirdropByOwner?: Record<string, string>;
+  };
+  let airdropConfig: AirdropConfigRaw | undefined = (project as { airdropConfig?: AirdropConfigRaw }).airdropConfig;
+  if (airdropConfig?.distributionInS3) {
+    const { getDistributionFromS3 } = await import("./airdropService");
+    const distribution = await getDistributionFromS3(projectId);
+    const { distributionInS3: _, ...rest } = airdropConfig;
+    airdropConfig = { ...rest, distribution: distribution ?? undefined } as AirdropConfigRaw;
+  }
   return {
     id: project._id.toString(),
     userId: project.userId,
@@ -262,7 +281,8 @@ export async function getProjectById(projectId: string) {
     colorSchemaId: project.colorSchemaId,
       sectionVisibility: project.sectionVisibility,
       sectionOrder: project.sectionOrder,
-      sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
+      sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string }; customText?: string }> }).sectionCustomization,
+      airdropConfig,
       hideToklyBadge: project.hideToklyBadge,
     analyticsDisabled: project.analyticsDisabled,
     projectVisibility: project.projectVisibility ?? "workspace",
@@ -492,7 +512,8 @@ export async function getProjectByPublishUrl(
     colorSchemaId: project.colorSchemaId,
       sectionVisibility: project.sectionVisibility,
       sectionOrder: project.sectionOrder,
-      sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
+      sectionCustomization: (project as { sectionCustomization?: Record<string, { layout?: { type?: string }; customText?: string }> }).sectionCustomization,
+      airdropConfig: (project as { airdropConfig?: { contractAddress?: string; chain?: string; taskType?: string; status?: "open" | "closed" } }).airdropConfig,
       hideToklyBadge: project.hideToklyBadge,
     analyticsDisabled: project.analyticsDisabled,
     projectVisibility: project.projectVisibility ?? "workspace",
@@ -1741,7 +1762,7 @@ export async function updateProjectTemplate(
   };
 }
 
-const VALID_SECTION_IDS = ["hero", "about", "tokenomics", "roadmap", "faq", "team", "live-chart", "how-to-buy", "join-community", "whitelist"] as const;
+const VALID_SECTION_IDS = ["hero", "about", "tokenomics", "roadmap", "faq", "team", "live-chart", "how-to-buy", "join-community", "whitelist", "airdrop"] as const;
 
 export async function updateProjectSectionVisibility(
   userId: string,
@@ -1862,6 +1883,216 @@ export async function updateWhitelistSectionContent(
   const updated = await getProjectById(projectId);
   if (!updated) throw new Error("Project not found");
   logProjectChange(projectId, userId, "Updated whitelist section content", "sections");
+  emitProjectUpdated(projectId);
+  return updated;
+}
+
+export async function updateAirdropSectionContent(
+  userId: string,
+  projectId: string,
+  customText: string | null
+): Promise<NonNullable<Awaited<ReturnType<typeof getProjectById>>>> {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  await ensureUserCanEditProject(userId, project);
+
+  const existing = (project as { sectionCustomization?: Record<string, SectionCustomizationValue> }).sectionCustomization ?? {};
+  const sectionCustomization = { ...existing };
+  const existingAirdrop = (sectionCustomization.airdrop ?? {}) as SectionCustomizationValue;
+  const hasContent = customText != null && String(customText).trim() !== "";
+  sectionCustomization.airdrop = {
+    ...existingAirdrop,
+    ...(hasContent ? { customText: String(customText).trim() } : {}),
+  };
+  if (!hasContent && (sectionCustomization.airdrop as SectionCustomizationValue).customText !== undefined) {
+    delete (sectionCustomization.airdrop as SectionCustomizationValue).customText;
+  }
+
+  await ProjectModel.updateOne(
+    { _id: projectId },
+    { $set: { sectionCustomization } }
+  );
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  logProjectChange(projectId, userId, "Updated airdrop section content", "sections");
+  emitProjectUpdated(projectId);
+  return updated;
+}
+
+export type AirdropDistributionBatch = {
+  batchIndex: number;
+  recipients: number;
+  amountTokens: string;
+  status: string;
+  tx?: string;
+};
+
+export type AirdropDistributionInput = {
+  initiatedAt: string;
+  network: string;
+  status: "in_progress" | "completed";
+  batches: AirdropDistributionBatch[];
+  amountPerRecipient: string;
+  totalRecipients: number;
+};
+
+export type AirdropConfigInput = {
+  contractAddress?: string | null;
+  /** EVM: owner address when contract was deployed/set. Stored so we can show "wrong wallet" when connected wallet is not owner. */
+  contractOwner?: string | null;
+  /** Solana: wallet pubkey that owns the airdrop PDA. When set with contractAddress, stores PDA per wallet so switching wallet shows the right airdrop. */
+  solanaAirdropOwner?: string | null;
+  chain?: string | null;
+  taskType?: string | null;
+  /** Eligibility tasks: [{ type: string, url?: string }]. When set, stored in airdropConfig.eligibilityTasks. */
+  eligibilityTasks?: Array<{ type: string; url?: string; label?: string }> | null;
+  /** Participation requirements: [{ type, amount?, symbol?, count?, days?, contractAddress?, ... }]. When set, stored in airdropConfig.participationRequirements. */
+  participationRequirements?: Array<Record<string, unknown>> | null;
+  status?: "open" | "closed" | null;
+  distribution?: AirdropDistributionInput | null;
+};
+
+export async function updateProjectAirdropConfig(
+  userId: string,
+  projectId: string,
+  input: AirdropConfigInput
+): Promise<NonNullable<Awaited<ReturnType<typeof getProjectById>>>> {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  await ensureUserCanEditProject(userId, project);
+
+  const isRemovingEvmContract =
+    input.contractAddress !== undefined &&
+    (input.contractAddress === null || (typeof input.contractAddress === "string" && input.contractAddress.trim() === "")) &&
+    !input.solanaAirdropOwner;
+
+  const isRemovingSolanaContract =
+    input.contractAddress !== undefined &&
+    (input.contractAddress === null || (typeof input.contractAddress === "string" && input.contractAddress.trim() === "")) &&
+    !!input.solanaAirdropOwner;
+
+  if (isRemovingEvmContract || isRemovingSolanaContract) {
+    const { deleteDistributionFromS3 } = await import("./airdropService");
+    const existing = (project as { airdropConfig?: { distributionInS3?: boolean } }).airdropConfig;
+    if (existing?.distributionInS3) {
+      await deleteDistributionFromS3(projectId);
+    }
+    await ProjectModel.updateOne({ _id: projectId }, { $unset: { airdropConfig: "" } });
+    const updated = await getProjectById(projectId);
+    if (!updated) throw new Error("Project not found");
+    logProjectChange(projectId, userId, "Removed airdrop config", "tools");
+    emitProjectUpdated(projectId);
+    return updated;
+  }
+
+  type ExistingConfig = {
+    contractAddress?: string;
+    contractOwner?: string;
+    chain?: string;
+    taskType?: string;
+    eligibilityTasks?: Array<{ type: string; url?: string; label?: string }>;
+    participationRequirements?: Array<Record<string, unknown>>;
+    status?: "open" | "closed";
+    distribution?: AirdropDistributionInput;
+    solanaAirdropByOwner?: Record<string, string>;
+  };
+  const existing = (project as { airdropConfig?: ExistingConfig }).airdropConfig ?? {};
+  const airdropConfig: ExistingConfig = { ...existing };
+
+  if (input.contractAddress !== undefined) {
+    const v = typeof input.contractAddress === "string" ? input.contractAddress.trim() : "";
+    const owner = typeof input.solanaAirdropOwner === "string" ? input.solanaAirdropOwner.trim() : "";
+    if (owner) {
+      const map = { ...(airdropConfig.solanaAirdropByOwner || {}) };
+      if (v) {
+        map[owner] = v;
+      } else {
+        delete map[owner];
+      }
+      airdropConfig.solanaAirdropByOwner = Object.keys(map).length > 0 ? map : undefined;
+      /** Solana: persist owner when setting PDA; clear when removing. */
+      airdropConfig.contractOwner = v ? owner : undefined;
+    }
+    airdropConfig.contractAddress = v || undefined;
+  }
+  if (input.contractOwner !== undefined) {
+    const v = typeof input.contractOwner === "string" ? input.contractOwner.trim() : "";
+    airdropConfig.contractOwner = v || undefined;
+  }
+  if (input.chain !== undefined) {
+    const v = typeof input.chain === "string" ? input.chain.trim() : "";
+    airdropConfig.chain = v || undefined;
+  }
+  if (input.taskType !== undefined) {
+    const v = typeof input.taskType === "string" ? input.taskType.trim() : "";
+    airdropConfig.taskType = v || undefined;
+  }
+  if (input.eligibilityTasks !== undefined) {
+    const raw = input.eligibilityTasks;
+    const arr = Array.isArray(raw)
+      ? raw
+          .filter((t) => t && typeof t === "object" && typeof (t as { type?: unknown }).type === "string")
+          .map((t) => {
+            const o = t as { type: string; url?: string; label?: string };
+            return {
+              type: String(o.type).trim(),
+              url: typeof o.url === "string" ? o.url.trim() || undefined : undefined,
+              label: typeof o.label === "string" ? o.label.trim() || undefined : undefined,
+            };
+          })
+      : undefined;
+    airdropConfig.eligibilityTasks = arr?.length ? arr : undefined;
+  }
+  if (input.participationRequirements !== undefined) {
+    const raw = input.participationRequirements;
+    const arr = Array.isArray(raw)
+      ? raw
+          .filter((r) => r && typeof r === "object" && typeof (r as { type?: unknown }).type === "string")
+          .map((r) => {
+            const o = r as Record<string, unknown>;
+            const out: Record<string, unknown> = { type: String(o.type).trim() };
+            if (o.amount != null && String(o.amount).trim() !== "") out.amount = String(o.amount).trim();
+            if (o.symbol != null && String(o.symbol).trim() !== "") out.symbol = String(o.symbol).trim();
+            if (o.count != null) out.count = Number(o.count) || 0;
+            if (o.gasValue != null && String(o.gasValue).trim() !== "") out.gasValue = String(o.gasValue).trim();
+            if (o.days != null) out.days = Number(o.days) || 0;
+            if (o.tokenAmount != null && String(o.tokenAmount).trim() !== "")
+              out.tokenAmount = String(o.tokenAmount).trim();
+            if (o.tokenContract != null && String(o.tokenContract).trim() !== "")
+              out.tokenContract = String(o.tokenContract).trim();
+            if (o.tokenName != null && String(o.tokenName).trim() !== "")
+              out.tokenName = String(o.tokenName).trim();
+            if (o.tokenSymbol != null && String(o.tokenSymbol).trim() !== "")
+              out.tokenSymbol = String(o.tokenSymbol).trim();
+            return out;
+          })
+      : undefined;
+    airdropConfig.participationRequirements = arr?.length ? arr : undefined;
+  }
+  if (input.status !== undefined && input.status !== null) {
+    airdropConfig.status = input.status === "open" || input.status === "closed" ? input.status : "open";
+  }
+  if (input.distribution !== undefined) {
+    const { saveDistributionToS3, deleteDistributionFromS3 } = await import("./airdropService");
+    const ac = airdropConfig as { distribution?: unknown; distributionInS3?: boolean };
+    if (input.distribution === null) {
+      await deleteDistributionFromS3(projectId);
+      delete ac.distribution;
+      delete ac.distributionInS3;
+    } else {
+      await saveDistributionToS3(projectId, input.distribution);
+      delete ac.distribution;
+      ac.distributionInS3 = true;
+    }
+  }
+
+  await ProjectModel.updateOne(
+    { _id: projectId },
+    { $set: { airdropConfig } }
+  );
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  logProjectChange(projectId, userId, "Updated airdrop config", "tools");
   emitProjectUpdated(projectId);
   return updated;
 }
@@ -2574,7 +2805,8 @@ export async function listProjectsByUser(
       colorSchemaId: p.colorSchemaId,
       sectionVisibility: p.sectionVisibility,
       sectionOrder: p.sectionOrder,
-      sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
+      sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string }; customText?: string }> }).sectionCustomization,
+      airdropConfig: (p as { airdropConfig?: { contractAddress?: string; chain?: string; taskType?: string; status?: "open" | "closed" } }).airdropConfig,
       hideToklyBadge: p.hideToklyBadge,
       analyticsDisabled: p.analyticsDisabled,
       projectVisibility: p.projectVisibility ?? "workspace",
@@ -2636,7 +2868,8 @@ export async function listProjectsByUser(
       colorSchemaId: p.colorSchemaId,
       sectionVisibility: p.sectionVisibility,
       sectionOrder: p.sectionOrder,
-      sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
+      sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string }; customText?: string }> }).sectionCustomization,
+      airdropConfig: (p as { airdropConfig?: { contractAddress?: string; chain?: string; taskType?: string; status?: "open" | "closed" } }).airdropConfig,
       hideToklyBadge: p.hideToklyBadge,
       analyticsDisabled: p.analyticsDisabled,
       projectVisibility: p.projectVisibility ?? "workspace",
@@ -2703,7 +2936,8 @@ export async function listProjectsByUser(
     colorSchemaId: p.colorSchemaId,
     sectionVisibility: p.sectionVisibility,
     sectionOrder: p.sectionOrder,
-    sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string } }> }).sectionCustomization,
+    sectionCustomization: (p as { sectionCustomization?: Record<string, { layout?: { type?: string }; customText?: string }> }).sectionCustomization,
+    airdropConfig: (p as { airdropConfig?: { contractAddress?: string; chain?: string; taskType?: string; status?: "open" | "closed" } }).airdropConfig,
     hideToklyBadge: p.hideToklyBadge,
     analyticsDisabled: p.analyticsDisabled,
     projectVisibility: p.projectVisibility ?? "workspace",

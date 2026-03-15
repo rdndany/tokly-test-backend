@@ -39,6 +39,8 @@ import {
   updateProjectSectionVisibility as updateSectionVisibilityService,
   updateProjectSectionLayout as updateSectionLayoutService,
   updateWhitelistSectionContent as updateWhitelistSectionContentService,
+  updateAirdropSectionContent as updateAirdropSectionContentService,
+  updateProjectAirdropConfig as updateProjectAirdropConfigService,
   updateProjectTokenomics as updateTokenomicsService,
   updateProjectRoadmap as updateRoadmapService,
   updateProjectFAQ as updateFAQService,
@@ -1109,27 +1111,31 @@ export async function updateSectionVisibility(
       ? body.sectionOrder
       : undefined;
 
-  if (sectionVisibility.whitelist === true) {
-    try {
-      const project = await getProjectById(projectId);
-      if (project) {
-        await ensureUserCanEditProjectService(userId, project);
-        const workspaceId = project.workspaceId?.toString();
-        if (workspaceId) {
-          const planStatus = await getWorkspacePlanStatus(workspaceId);
-          if (planStatus !== "pro") {
-            res.status(403).json({
-              error: "Pro plan is required to enable the Whitelist section.",
-            });
-            return;
+  const proSectionIds = ["whitelist", "airdrop"] as const;
+  for (const sectionId of proSectionIds) {
+    if (sectionVisibility[sectionId] === true) {
+      try {
+        const project = await getProjectById(projectId);
+        if (project) {
+          await ensureUserCanEditProjectService(userId, project);
+          const workspaceId = project.workspaceId?.toString();
+          if (workspaceId) {
+            const planStatus = await getWorkspacePlanStatus(workspaceId);
+            if (planStatus !== "pro") {
+              const names: Record<string, string> = { whitelist: "Whitelist", airdrop: "Airdrop" };
+              res.status(403).json({
+                error: `Pro plan is required to enable the ${names[sectionId]} section.`,
+              });
+              return;
+            }
           }
         }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Forbidden";
+        const status = msg === "Project not found" ? 404 : 403;
+        res.status(status).json({ error: msg });
+        return;
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Forbidden";
-      const status = msg === "Project not found" ? 404 : 403;
-      res.status(status).json({ error: msg });
-      return;
     }
   }
 
@@ -1218,6 +1224,44 @@ export async function updateWhitelistSectionContent(
   } catch (err) {
     const msg =
       err instanceof Error ? err.message : "Failed to update whitelist section content";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+export async function updateAirdropSectionContent(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const customText =
+    req.body?.customText === undefined
+      ? undefined
+      : req.body?.customText === null
+        ? null
+        : typeof req.body?.customText === "string"
+          ? req.body.customText
+          : undefined;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  if (customText === undefined) {
+    res.status(400).json({ error: "customText is required (string or null)" });
+    return;
+  }
+  try {
+    const project = await updateAirdropSectionContentService(userId, projectId, customText);
+    res.status(200).json(project);
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : "Failed to update airdrop section content";
     const status =
       msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
     res.status(status).json({ error: msg });
@@ -1753,6 +1797,42 @@ export async function addWhitelistEntry(req: Request, res: Response): Promise<vo
   }
 }
 
+/** POST /api/projects/:projectId/whitelist/bulk – add many addresses in one request (auth, can edit). */
+export async function addWhitelistEntriesBulk(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const listId = typeof req.body?.listId === "string" ? req.body.listId.trim() || "default" : "default";
+  const addresses = Array.isArray(req.body?.addresses) ? req.body.addresses : [];
+  const normalizedAddresses = (addresses as unknown[])
+    .filter((a: unknown): a is string => typeof a === "string")
+    .map((a: string) => a.trim())
+    .filter(Boolean);
+  if (!projectId || normalizedAddresses.length === 0) {
+    res.status(400).json({ error: "Project ID and non-empty addresses array are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { addWhitelistEntriesBulk: addBulk } = await import("../services/whitelistService");
+    const { entries, addedCount, alreadyCount } = await addBulk(projectId, listId, normalizedAddresses);
+    res.status(200).json({ entries, addedCount, alreadyCount });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to add whitelist addresses";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
 /** DELETE /api/projects/:projectId/whitelist – remove address (auth, can edit, Pro plan). */
 export async function removeWhitelistEntry(req: Request, res: Response): Promise<void> {
   const userId = req.auth?.userId;
@@ -1886,5 +1966,676 @@ export async function deleteWhitelistList(req: Request, res: Response): Promise<
     const status =
       msg === "Project not found" ? 404 : msg === "Whitelist not found" ? 404 : msg === "Forbidden" ? 403 : 500;
     res.status(status).json({ error: msg });
+  }
+}
+
+/** GET /api/projects/:projectId/airdrop – list airdrop entries (auth, can edit). */
+export async function getAirdrop(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { getAirdropData } = await import("../services/airdropService");
+    const data = await getAirdropData(projectId);
+    res.status(200).json({ entries: data.entries });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to get airdrop";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** Solana address: base58, typically 32–44 characters (matches frontend validation). */
+const SOLANA_ADDRESS_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/** POST /api/projects/:projectId/airdrop/submit – public, submit address for airdrop (no auth). Supports EVM and Solana by project chain. */
+export async function submitAirdropEntry(req: Request, res: Response): Promise<void> {
+  const projectId = req.params.projectId;
+  const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const airdropConfig = (project as { airdropConfig?: { status?: string } }).airdropConfig;
+    if (airdropConfig?.status === "closed") {
+      res.status(400).json({ error: "Airdrop registration is closed" });
+      return;
+    }
+    const chain = (project.tokenDetails as { chain?: string } | undefined)?.chain?.toLowerCase() ?? "";
+    const isSolanaProject = chain === "solana" || chain === "sol";
+
+    if (isSolanaProject) {
+      const validSolana = address.length >= 32 && address.length <= 44 && SOLANA_ADDRESS_REGEX.test(address);
+      if (!validSolana) {
+        res.status(400).json({ error: "Invalid Solana address (use base58, 32–44 characters)" });
+        return;
+      }
+    } else {
+      const validEvm = /^0x[a-fA-F0-9]{40}$/.test(address);
+      if (!validEvm) {
+        res.status(400).json({ error: "Invalid EVM address (use 0x + 40 hex characters)" });
+        return;
+      }
+    }
+
+    const airdropConfigTyped = project as { airdropConfig?: { chain?: string; participationRequirements?: Array<{ type: string; count?: number; amount?: string; gasValue?: string }> } };
+    const participationRequirements = airdropConfigTyped.airdropConfig?.participationRequirements;
+    const airdropChain = (airdropConfigTyped.airdropConfig?.chain ?? (project.tokenDetails as { chain?: string })?.chain)?.trim() ?? "";
+    const solanaCluster: "devnet" | "mainnet-beta" =
+      isSolanaProject && airdropChain.toLowerCase() === "devnet" ? "devnet" : "mainnet-beta";
+
+    const {
+      getMinTransactionsRequirement,
+      getMinNativeBalanceRequirement,
+      getMinGasSpentRequirement,
+      getActivityDaysRequirement,
+      getMinTokenBalanceRequirement,
+      checkEvmMinTransactions,
+      checkSolanaMinTransactions,
+      checkEvmMinNativeBalance,
+      checkSolanaMinNativeBalance,
+      checkEvmMinGasSpent,
+      checkSolanaMinGasSpent,
+      checkEvmActivityDays,
+      checkSolanaActivityDays,
+      checkEvmMinTokenBalance,
+      checkSolanaMinTokenBalance,
+    } = await import("../services/participationRequirementsService");
+    const evmApiKey = process.env.ETHERSCAN_API_KEY;
+
+    const minTx = getMinTransactionsRequirement(participationRequirements);
+    if (minTx != null) {
+      if (isSolanaProject) {
+        const result = await checkSolanaMinTransactions(address, solanaCluster, minTx);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? `Minimum ${minTx} transactions required.` });
+          return;
+        }
+      } else {
+        const result = await checkEvmMinTransactions(address, airdropChain, minTx, evmApiKey);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? `Minimum ${minTx} transactions required.` });
+          return;
+        }
+      }
+    }
+
+    const minNativeAmount = getMinNativeBalanceRequirement(participationRequirements);
+    if (minNativeAmount != null) {
+      if (isSolanaProject) {
+        const result = await checkSolanaMinNativeBalance(address, solanaCluster, minNativeAmount);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Insufficient native balance." });
+          return;
+        }
+      } else {
+        if (!airdropChain) {
+          res.status(400).json({ error: "Airdrop chain is required to check minimum native balance." });
+          return;
+        }
+        const result = await checkEvmMinNativeBalance(address, airdropChain, minNativeAmount);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Insufficient native balance." });
+          return;
+        }
+      }
+    }
+
+    const minGasSpent = getMinGasSpentRequirement(participationRequirements);
+    if (minGasSpent != null) {
+      if (isSolanaProject) {
+        const result = await checkSolanaMinGasSpent(address, solanaCluster, minGasSpent);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Minimum gas spent not met." });
+          return;
+        }
+      } else {
+        if (!airdropChain) {
+          res.status(400).json({ error: "Airdrop chain is required to check minimum gas spent." });
+          return;
+        }
+        const result = await checkEvmMinGasSpent(address, airdropChain, minGasSpent, evmApiKey);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Minimum gas spent not met." });
+          return;
+        }
+      }
+    }
+
+    const minActivityDays = getActivityDaysRequirement(participationRequirements);
+    if (minActivityDays != null) {
+      if (isSolanaProject) {
+        const result = await checkSolanaActivityDays(address, solanaCluster, minActivityDays);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Activity over multiple days not met." });
+          return;
+        }
+      } else {
+        if (!airdropChain) {
+          res.status(400).json({ error: "Airdrop chain is required to check activity days." });
+          return;
+        }
+        const result = await checkEvmActivityDays(address, airdropChain, minActivityDays, evmApiKey);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Activity over multiple days not met." });
+          return;
+        }
+      }
+    }
+
+    const minTokenBalance = getMinTokenBalanceRequirement(participationRequirements);
+    if (minTokenBalance != null) {
+      const { amount, tokenContract } = minTokenBalance;
+      if (isSolanaProject) {
+        const result = await checkSolanaMinTokenBalance(address, solanaCluster, amount, tokenContract);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Minimum token balance not met." });
+          return;
+        }
+      } else {
+        if (!airdropChain) {
+          res.status(400).json({ error: "Airdrop chain is required to check minimum token balance." });
+          return;
+        }
+        const result = await checkEvmMinTokenBalance(address, airdropChain, amount, tokenContract);
+        if (!result.ok) {
+          res.status(400).json({ error: result.message ?? "Minimum token balance not met." });
+          return;
+        }
+      }
+    }
+
+    const { addAirdropEntry: addEntry } = await import("../services/airdropService");
+    const { entries, alreadyAdded } = await addEntry(projectId, address);
+    res.status(200).json({ entries, alreadyAdded });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to submit airdrop entry";
+    res.status(500).json({ error: msg });
+  }
+}
+
+/** GET /api/projects/:projectId/airdrop/check?address=0x... – public, is address in airdrop list? */
+export async function checkAirdrop(req: Request, res: Response): Promise<void> {
+  const projectId = req.params.projectId;
+  const address = typeof req.query?.address === "string" ? req.query.address.trim() : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const { getAirdropEntries } = await import("../services/airdropService");
+    const entries = await getAirdropEntries(projectId);
+    const normalized = address.startsWith("0x") ? address.toLowerCase() : address;
+    const registered = entries.some((e) => e.address === normalized);
+    res.status(200).json({ registered });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to check airdrop" });
+  }
+}
+
+/** POST /api/projects/:projectId/airdrop – add address (auth, can edit). */
+export async function addAirdropEntry(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { addAirdropEntry: addEntry } = await import("../services/airdropService");
+    const { entries, alreadyAdded } = await addEntry(projectId, address);
+    res.status(200).json({ entries, alreadyAdded });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to add airdrop entry";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** POST /api/projects/:projectId/airdrop/bulk – add many addresses in one request (auth, can edit). */
+export async function addAirdropEntriesBulk(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const addresses = Array.isArray(req.body?.addresses) ? req.body.addresses : [];
+  const normalizedAddresses = (addresses as unknown[])
+    .filter((a: unknown): a is string => typeof a === "string")
+    .map((a: string) => a.trim())
+    .filter(Boolean);
+  if (!projectId || normalizedAddresses.length === 0) {
+    res.status(400).json({ error: "Project ID and non-empty addresses array are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { addAirdropEntriesBulk: addBulk } = await import("../services/airdropService");
+    const { entries, addedCount, alreadyCount } = await addBulk(projectId, normalizedAddresses);
+    res.status(200).json({ entries, addedCount, alreadyCount });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to add airdrop addresses";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** DELETE /api/projects/:projectId/airdrop – remove address (auth, can edit). */
+export async function removeAirdropEntry(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const address =
+    typeof req.body?.address === "string"
+      ? req.body.address.trim()
+      : typeof req.query?.address === "string"
+        ? req.query.address.trim()
+        : "";
+  if (!projectId || !address) {
+    res.status(400).json({ error: "Project ID and address are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { removeAirdropEntry: removeEntry } = await import("../services/airdropService");
+    const entries = await removeEntry(projectId, address);
+    res.status(200).json({ entries });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to remove airdrop entry";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** DELETE /api/projects/:projectId/airdrop/entries – remove all airdrop entries (auth, can edit). */
+export async function clearAirdropEntries(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const { clearAirdropEntries: clearEntries } = await import("../services/airdropService");
+    await clearEntries(projectId);
+    res.status(200).json({ entries: [] });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to clear airdrop entries";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** PATCH /api/projects/:projectId/airdrop/config – update airdrop config (contractAddress, chain, taskType, status). */
+export async function updateAirdropConfig(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  const body = req.body || {};
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    await updateProjectAirdropConfigService(userId, projectId, {
+      contractAddress: body.contractAddress,
+      contractOwner: body.contractOwner,
+      solanaAirdropOwner: body.solanaAirdropOwner,
+      chain: body.chain,
+      taskType: body.taskType,
+      eligibilityTasks: body.eligibilityTasks,
+      participationRequirements: body.participationRequirements,
+      status: body.status,
+      distribution: body.distribution,
+    });
+    const updated = await getProjectById(projectId);
+    res.status(200).json(updated);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to update airdrop config";
+    const status =
+      msg === "Project not found" ? 404 : msg === "Forbidden" ? 403 : 500;
+    res.status(status).json({ error: msg });
+  }
+}
+
+/** GET /api/projects/:projectId/airdrop/token-info?contract=0x... – fetch token name and symbol (auth). */
+export async function getTokenInfo(req: Request, res: Response): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  const contract = typeof req.query?.contract === "string" ? req.query.contract.trim() : "";
+  if (!projectId || !contract) {
+    res.status(400).json({ error: "Project ID and contract are required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+    const projectChain = ((project as { tokenDetails?: { chain?: string } }).tokenDetails?.chain ?? "").toLowerCase().trim();
+    const airdropChain = ((project as { airdropConfig?: { chain?: string } }).airdropConfig?.chain ?? "").trim();
+    const isSolana = projectChain === "solana" || projectChain === "sol";
+    const solanaCluster: "devnet" | "mainnet-beta" =
+      isSolana && airdropChain.toLowerCase() === "devnet" ? "devnet" : "mainnet-beta";
+    const { getEvmTokenInfo, getSolanaTokenInfo } = await import("../services/participationRequirementsService");
+    if (isSolana) {
+      const info = await getSolanaTokenInfo(contract, solanaCluster);
+      if (!info) {
+        res.status(400).json({ error: "Could not fetch token info. Ensure the mint exists and has Metaplex or Token-2022 metadata." });
+        return;
+      }
+      res.status(200).json(info);
+      return;
+    }
+    const evmChain = airdropChain || projectChain || "1";
+    const info = await getEvmTokenInfo(contract, evmChain);
+    if (!info) {
+      res.status(400).json({ error: "Could not fetch token info. Ensure the contract is a valid ERC20." });
+      return;
+    }
+    res.status(200).json(info);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to fetch token info";
+    res.status(500).json({ error: msg });
+  }
+}
+
+/** GET /api/projects/:projectId/airdrop/solana/fee-estimate?batchCount=N – estimate SOL to pay relayer for N batches (includes 10% buffer). */
+export async function getSolanaRelayerFeeEstimate(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  const batchCount = Math.max(0, Math.floor(Number(req.query.batchCount) || 0));
+  if (batchCount < 1) {
+    res.status(400).json({ error: "batchCount must be at least 1" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+
+    const { getSolanaRelayerFeeEstimate: getFeeEstimate } = await import(
+      "../services/solanaRelayService"
+    );
+    const estimate = getFeeEstimate(batchCount);
+    if (!estimate) {
+      res.status(503).json({ error: "Relayer not configured" });
+      return;
+    }
+    res.status(200).json(estimate);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to get fee estimate";
+    res.status(500).json({ error: msg });
+  }
+}
+
+/** GET /api/projects/:projectId/airdrop/solana/relayer – relayer account address and SOL balance (test only / devnet). */
+export async function getSolanaRelayerInfo(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+
+    const airdropChain = ((project as { airdropConfig?: { chain?: string } }).airdropConfig?.chain ?? "").trim();
+    const cluster =
+      airdropChain === "mainnet-beta" ? ("mainnet-beta" as const) : ("devnet" as const);
+    const { getSolanaRelayerInfo: getRelayerInfo } = await import(
+      "../services/solanaRelayService"
+    );
+    const info = await getRelayerInfo(cluster);
+    if (!info) {
+      res.status(200).json({ configured: false });
+      return;
+    }
+    res.status(200).json({ configured: true, ...info });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to get relayer info";
+    res.status(500).json({ error: msg });
+  }
+}
+
+/** Batch size must match relayer (solanaRelayService.BATCH_SIZE). */
+const SOLANA_RELAY_BATCH_SIZE = 5;
+
+/** POST /api/projects/:projectId/airdrop/solana/continue-distribution – run remaining batches via backend relayer (one user confirmation). */
+export async function continueSolanaDistribution(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const userId = req.auth?.userId;
+  if (!userId) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  const projectId = req.params.projectId;
+  if (!projectId) {
+    res.status(400).json({ error: "Project ID is required" });
+    return;
+  }
+  // Allow up to 5 min for relayer to send all batches
+  req.setTimeout(300_000);
+  const body = req.body as {
+    airdropPda?: string;
+    mint?: string;
+    recipientAddresses?: string[];
+    amountPerRecipientBase?: number;
+    cluster?: "devnet" | "mainnet-beta";
+    /** Required: signature of the confirmed SOL transfer to the relayer. Ensures batches only run after user has paid. */
+    paymentTxSignature?: string;
+  };
+  try {
+    const project = await getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    await ensureUserCanEditProjectService(userId, project);
+
+    const airdropPda = body.airdropPda?.trim();
+    const mint = body.mint?.trim();
+    const recipientAddresses = Array.isArray(body.recipientAddresses)
+      ? body.recipientAddresses.filter((a) => typeof a === "string" && a.trim())
+      : [];
+    const amountPerRecipientBase =
+      typeof body.amountPerRecipientBase === "number" && body.amountPerRecipientBase > 0
+        ? body.amountPerRecipientBase
+        : 0;
+    const paymentTxSignature =
+      typeof body.paymentTxSignature === "string" ? body.paymentTxSignature.trim() : "";
+
+    if (!airdropPda || !mint || recipientAddresses.length === 0 || amountPerRecipientBase <= 0) {
+      res.status(400).json({
+        error: "airdropPda, mint, recipientAddresses, and amountPerRecipientBase are required",
+      });
+      return;
+    }
+
+    if (!paymentTxSignature) {
+      res.status(400).json({
+        error: "paymentTxSignature is required. Pay the relayer first, then call with the confirmed transaction signature.",
+      });
+      return;
+    }
+
+    const { verifyPaymentTransaction, continueSolanaDistribution: runRelay } = await import(
+      "../services/solanaRelayService"
+    );
+    const cluster = body.cluster === "mainnet-beta" ? "mainnet-beta" : "devnet";
+    const paymentOk = await verifyPaymentTransaction(cluster, paymentTxSignature);
+    if (!paymentOk) {
+      res.status(400).json({
+        error: "Payment transaction not found or not confirmed. Confirm the SOL transfer in your wallet first, then try again.",
+      });
+      return;
+    }
+
+    const { getDistributionFromS3, saveDistributionToS3 } = await import("../services/airdropService");
+
+    res.setHeader("Content-Type", "application/x-ndjson");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.status(200);
+    res.flushHeaders?.();
+
+    const writeLine = (obj: object) => {
+      res.write(JSON.stringify(obj) + "\n");
+    };
+
+    try {
+      const result = await runRelay({
+        airdropPda,
+        mint,
+        recipientAddresses,
+        amountPerRecipientBase,
+        cluster,
+        onBatchComplete: async (signature) => {
+          const distribution = await getDistributionFromS3(projectId);
+          if (distribution?.batches) {
+            const batchIndex = distribution.batches.length + 1;
+            const totalBatches = Math.ceil(
+              (distribution.totalRecipients ?? 0) / SOLANA_RELAY_BATCH_SIZE
+            );
+            const alreadySent = (distribution.batches.length ?? 0) * SOLANA_RELAY_BATCH_SIZE;
+            const recipientsInBatch = Math.min(
+              SOLANA_RELAY_BATCH_SIZE,
+              (distribution.totalRecipients ?? 0) - alreadySent
+            );
+            const amountPerRecipientHuman = Number(distribution.amountPerRecipient ?? 0);
+            const amountTokens = Number.isFinite(amountPerRecipientHuman)
+              ? String(Math.round(recipientsInBatch * amountPerRecipientHuman))
+              : String(recipientsInBatch * amountPerRecipientBase);
+            distribution.batches.push({
+              batchIndex,
+              recipients: recipientsInBatch,
+              amountTokens,
+              status: "done",
+              tx: signature,
+            });
+            if (batchIndex >= totalBatches) {
+              distribution.status = "completed";
+            }
+            await saveDistributionToS3(projectId, distribution);
+          }
+          writeLine({ type: "batch", signature });
+        },
+      });
+
+      if (result.error) {
+        writeLine({ type: "error", error: result.error, signatures: result.signatures });
+      } else {
+        writeLine({ type: "done", signatures: result.signatures });
+      }
+    } catch (relayErr) {
+      const msg = relayErr instanceof Error ? relayErr.message : "Continue distribution failed";
+      writeLine({ type: "error", error: msg, signatures: [] });
+    }
+    res.end();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Continue distribution failed";
+    res.status(500).json({ error: msg });
   }
 }

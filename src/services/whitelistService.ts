@@ -169,6 +169,50 @@ export async function addWhitelistEntry(
   return { entries: updatedEntries, alreadyWhitelisted: false };
 }
 
+export interface AddWhitelistEntriesBulkResult {
+  entries: WhitelistEntry[];
+  addedCount: number;
+  alreadyCount: number;
+}
+
+/** Add many addresses to a list in one read/write. Use for 100+ addresses to avoid timeouts. */
+export async function addWhitelistEntriesBulk(
+  projectId: string,
+  listId: string,
+  addresses: string[]
+): Promise<AddWhitelistEntriesBulkResult> {
+  if (!addresses.length) return { entries: [], addedCount: 0, alreadyCount: 0 };
+
+  const data = await getWhitelistData(projectId);
+  const listIndex = data.lists.findIndex((l) => l.id === listId);
+  if (listIndex === -1) throw new Error("Whitelist not found");
+
+  const list = data.lists[listIndex];
+  const existingSet = new Set(list.entries.map((e) => e.address));
+  const date = new Date().toISOString();
+  let addedCount = 0;
+  let alreadyCount = 0;
+  const newEntries: WhitelistEntry[] = [...list.entries];
+
+  for (const raw of addresses) {
+    const normalized = normalizeAddress(raw);
+    if (!normalized) continue;
+    if (existingSet.has(normalized)) {
+      alreadyCount += 1;
+      continue;
+    }
+    existingSet.add(normalized);
+    newEntries.push({ address: normalized, date });
+    addedCount += 1;
+  }
+
+  if (addedCount > 0) {
+    data.lists[listIndex] = { ...list, entries: newEntries };
+    await saveWhitelistData(projectId, data);
+  }
+  return { entries: newEntries, addedCount, alreadyCount };
+}
+
 export async function removeWhitelistEntry(
   projectId: string,
   address: string,

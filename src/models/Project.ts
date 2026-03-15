@@ -45,8 +45,30 @@ export interface ProjectDocument extends Document {
   /** Section layout customization: { hero: { layout: { type: "compact" } } } – layout type per section */
   sectionCustomization?: Record<
     string,
-    { layout?: { type?: string } }
+    { layout?: { type?: string }; customText?: string }
   >;
+  /** Airdrop config: contract address, chain, task, status (EVM only for now); distribution for Solana run progress */
+  airdropConfig?: {
+    contractAddress?: string;
+    chain?: string;
+    taskType?: string;
+    status?: "open" | "closed";
+    /** Current/last Solana distribution run: initiatedAt, network, status, batches, amountPerRecipient, totalRecipients */
+    distribution?: {
+      initiatedAt: Date;
+      network: string;
+      status: "in_progress" | "completed";
+      batches: Array<{
+        batchIndex: number;
+        recipients: number;
+        amountTokens: string;
+        status: string;
+        tx?: string;
+      }>;
+      amountPerRecipient: string;
+      totalRecipients: number;
+    };
+  };
   /** When true, hide the "Edit with Tokly" badge (Pro Plan feature, works for now) */
   hideToklyBadge?: boolean;
   /** When true, stop collecting analytics (view counts) for this project */
@@ -304,6 +326,53 @@ const projectSchema = new Schema<ProjectDocument>(
     sectionVisibility: { type: Schema.Types.Mixed },
     sectionOrder: { type: Schema.Types.Mixed },
     sectionCustomization: { type: Schema.Types.Mixed },
+    airdropConfig: {
+      type: new Schema(
+        {
+          contractAddress: { type: String, trim: true },
+          /** EVM: owner address when contract was deployed/set. Used to show "wrong wallet" when connected wallet is not owner. */
+          contractOwner: { type: String, trim: true },
+          chain: { type: String, trim: true },
+          taskType: { type: String, trim: true },
+          /** Eligibility tasks (multi-select) with optional URL per task. [{ type: "follow_x"|..., url?: string }] */
+          eligibilityTasks: { type: Schema.Types.Mixed },
+          /** Participation requirements (min balance, min tx count, etc.). [{ type, amount?, symbol?, count?, days?, contractAddress?, ... }] */
+          participationRequirements: { type: Schema.Types.Mixed },
+          status: { type: String, enum: ["open", "closed"], default: "open" },
+          distribution: {
+            type: new Schema(
+              {
+                initiatedAt: { type: Date, required: true },
+                network: { type: String, trim: true, default: "" },
+                status: { type: String, enum: ["in_progress", "completed"], default: "in_progress" },
+                batches: {
+                  type: [
+                    {
+                      batchIndex: { type: Number, required: true },
+                      recipients: { type: Number, required: true },
+                      amountTokens: { type: String, trim: true, default: "" },
+                      status: { type: String, trim: true, default: "done" },
+                      tx: { type: String, trim: true },
+                    },
+                  ],
+                  default: [],
+                },
+                amountPerRecipient: { type: String, trim: true, default: "" },
+                totalRecipients: { type: Number, default: 0 },
+              },
+              { _id: false }
+            ),
+            default: undefined,
+          },
+          /** When true, full distribution is in S3; hydrate in getProjectById. */
+          distributionInS3: { type: Boolean },
+          /** Solana: airdrop PDA per wallet owner (owner pubkey -> PDA). So switching wallet shows that wallet's airdrop. */
+          solanaAirdropByOwner: { type: Schema.Types.Mixed },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     hideToklyBadge: { type: Boolean },
     analyticsDisabled: { type: Boolean },
     projectVisibility: { type: String, enum: ["public", "workspace"], default: "workspace" },

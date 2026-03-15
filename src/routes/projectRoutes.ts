@@ -31,6 +31,7 @@ import {
   updateSectionVisibility,
   updateSectionLayout,
   updateWhitelistSectionContent,
+  updateAirdropSectionContent,
   updateTokenomics,
   updateRoadmap,
   updateFAQ,
@@ -42,10 +43,23 @@ import {
   checkWhitelist,
   submitWhitelistEntry,
   addWhitelistEntry,
+  addWhitelistEntriesBulk,
   removeWhitelistEntry,
   createWhitelistList,
   updateWhitelistListName,
   deleteWhitelistList,
+  getAirdrop,
+  submitAirdropEntry,
+  checkAirdrop,
+  addAirdropEntry,
+  addAirdropEntriesBulk,
+  removeAirdropEntry,
+  clearAirdropEntries,
+  updateAirdropConfig,
+  getTokenInfo,
+  continueSolanaDistribution,
+  getSolanaRelayerInfo,
+  getSolanaRelayerFeeEstimate,
 } from "../controllers/ProjectController";
 import {
   chat,
@@ -96,6 +110,7 @@ router.patch("/:projectId/template", checkAuth, updateTemplate);
 router.patch("/:projectId/section-visibility", checkAuth, updateSectionVisibility);
 router.patch("/:projectId/section-layout", checkAuth, updateSectionLayout);
 router.patch("/:projectId/whitelist-section-content", checkAuth, updateWhitelistSectionContent);
+router.patch("/:projectId/airdrop-section-content", checkAuth, updateAirdropSectionContent);
 router.patch("/:projectId/tokenomics", checkAuth, updateTokenomics);
 router.patch("/:projectId/roadmap", checkAuth, updateRoadmap);
 router.patch("/:projectId/faq", checkAuth, updateFAQ);
@@ -112,10 +127,23 @@ router.put("/:projectId/files", checkAuth, putFile);
 router.get("/:projectId/whitelist/check", checkWhitelist); // Public – no auth
 router.post("/:projectId/whitelist/submit", submitWhitelistEntry); // Public – no auth, submit address
 router.get("/:projectId/whitelist", checkAuth, getWhitelist);
+router.post("/:projectId/whitelist/bulk", checkAuth, addWhitelistEntriesBulk);
 router.post("/:projectId/whitelist", checkAuth, addWhitelistEntry);
 router.delete("/:projectId/whitelist", checkAuth, removeWhitelistEntry);
 router.post("/:projectId/whitelist/lists", checkAuth, createWhitelistList);
 router.patch("/:projectId/whitelist/lists/:listId", checkAuth, updateWhitelistListName);
 router.delete("/:projectId/whitelist/lists/:listId", checkAuth, deleteWhitelistList);
+router.get("/:projectId/airdrop/check", checkAirdrop); // Public – no auth
+router.post("/:projectId/airdrop/submit", submitAirdropEntry); // Public – no auth
+router.get("/:projectId/airdrop", checkAuth, getAirdrop);
+router.post("/:projectId/airdrop/bulk", checkAuth, addAirdropEntriesBulk);
+router.post("/:projectId/airdrop", checkAuth, addAirdropEntry);
+router.delete("/:projectId/airdrop/entries", checkAuth, clearAirdropEntries);
+router.delete("/:projectId/airdrop", checkAuth, removeAirdropEntry);
+router.patch("/:projectId/airdrop/config", checkAuth, updateAirdropConfig);
+router.get("/:projectId/airdrop/token-info", checkAuth, getTokenInfo);
+router.get("/:projectId/airdrop/solana/relayer", checkAuth, getSolanaRelayerInfo);
+router.get("/:projectId/airdrop/solana/fee-estimate", checkAuth, getSolanaRelayerFeeEstimate);
+router.post("/:projectId/airdrop/solana/continue-distribution", checkAuth, continueSolanaDistribution);
 
 export default router;
