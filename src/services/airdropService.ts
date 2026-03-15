@@ -17,7 +17,7 @@ function getDistributionKey(projectId: string): string {
 export interface AirdropDistributionData {
   initiatedAt: string;
   network: string;
-  status: "in_progress" | "completed";
+  status: "in_progress" | "in_progress_send_all" | "completed";
   batches: Array<{
     batchIndex: number;
     recipients: number;

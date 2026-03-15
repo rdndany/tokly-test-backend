@@ -302,7 +302,10 @@ export async function continueSolanaDistribution(
     if (params.projectId) {
       const { getDistributionFromS3 } = await import("./airdropService");
       const distribution = await getDistributionFromS3(params.projectId);
-      if (!distribution || distribution.status !== "in_progress") {
+      const status = distribution?.status;
+      const stillRunning =
+        status === "in_progress" || status === "in_progress_send_all";
+      if (!distribution || !stillRunning) {
         return { signatures, error: "Distribution cancelled" };
       }
     }
