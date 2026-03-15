@@ -12,7 +12,7 @@ import {
 } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountInstruction,
+  createAssociatedTokenAccountIdempotentInstructionWithDerivation,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 
@@ -40,8 +40,9 @@ function getVaultPda(airdrop: PublicKey): [PublicKey, number] {
   );
 }
 
+/** Recipient ATA. allowOwnerOffCurve: true so PDA recipients (e.g. from other programs) are supported. */
 function getRecipientAta(mint: PublicKey, recipient: PublicKey): PublicKey {
-  return getAssociatedTokenAddressSync(mint, recipient, false);
+  return getAssociatedTokenAddressSync(mint, recipient, true);
 }
 
 function buildDropTokensIx(params: {
@@ -67,17 +68,17 @@ function buildDropTokensIx(params: {
   });
 }
 
-function createAtaIxIfNeeded(params: {
+/** Idempotent create ATA; allowOwnerOffCurve: true for PDA recipients. No-op if ATA already exists. */
+function createAtaIdempotentIx(params: {
   mint: PublicKey;
   owner: PublicKey;
   payer: PublicKey;
 }): TransactionInstruction {
-  const ata = getAssociatedTokenAddressSync(params.mint, params.owner, false);
-  return createAssociatedTokenAccountInstruction(
+  return createAssociatedTokenAccountIdempotentInstructionWithDerivation(
     params.payer,
-    ata,
     params.owner,
-    params.mint
+    params.mint,
+    true
   );
 }
 
@@ -313,27 +314,12 @@ export async function continueSolanaDistribution(
 
     if (atas.length === 0) continue;
 
-    let ataInfos: Awaited<ReturnType<Connection["getMultipleAccountsInfo"]>>;
-    try {
-      ataInfos = await connection.getMultipleAccountsInfo(atas);
-    } catch (err) {
-      if (isRateLimit(err)) {
-        await delay(retryDelays[0]);
-        ataInfos = await connection.getMultipleAccountsInfo(atas);
-      } else {
-        throw err;
-      }
-    }
-
     await delay(betweenRpcMs);
 
     for (let i = 0; i < recipientPubkeys.length; i++) {
       const recipientPubkey = recipientPubkeys[i];
       const recipientAta = atas[i];
-      const info = ataInfos[i] ?? null;
-      if (!info) {
-        tx.add(createAtaIxIfNeeded({ mint, owner: recipientPubkey, payer }));
-      }
+      tx.add(createAtaIdempotentIx({ mint, owner: recipientPubkey, payer }));
       tx.add(
         buildDropTokensIx({
           airdropPda,
