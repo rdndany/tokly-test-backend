@@ -90,8 +90,6 @@ export interface ContinueDistributionParams {
   cluster?: "devnet" | "mainnet-beta";
   /** Called after each batch is sent so the client can update progress in real time. */
   onBatchComplete?: (signature: string) => void | Promise<void>;
-  /** When true, stop sending further batches (e.g. user cancelled). Checked before each batch. */
-  isAborted?: () => boolean;
 }
 
 export interface ContinueDistributionResult {
@@ -299,7 +297,6 @@ export async function continueSolanaDistribution(
   await delay(betweenRpcMs);
 
   for (let start = 0; start < addresses.length; start += BATCH_SIZE) {
-    if (params.isAborted?.()) break;
     const batch = addresses.slice(start, start + BATCH_SIZE);
     const tx = new Transaction();
 
