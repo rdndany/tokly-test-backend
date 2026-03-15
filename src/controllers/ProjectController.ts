@@ -2583,7 +2583,13 @@ export async function continueSolanaDistribution(
 
     const writeLine = (obj: object) => {
       res.write(JSON.stringify(obj) + "\n");
+      (res as Response & { flush?: () => void }).flush?.();
     };
+
+    let requestAborted = false;
+    req.on("aborted", () => {
+      requestAborted = true;
+    });
 
     try {
       const result = await runRelay({
@@ -2592,6 +2598,7 @@ export async function continueSolanaDistribution(
         recipientAddresses,
         amountPerRecipientBase,
         cluster,
+        isAborted: () => requestAborted,
         onBatchComplete: async (signature) => {
           const distribution = await getDistributionFromS3(projectId);
           if (distribution?.batches) {
