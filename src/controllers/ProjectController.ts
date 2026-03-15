@@ -2593,6 +2593,7 @@ export async function continueSolanaDistribution(
         recipientAddresses,
         amountPerRecipientBase,
         cluster,
+        projectId,
         onBatchComplete: async (signature) => {
           const distribution = await getDistributionFromS3(projectId);
           if (distribution?.batches) {

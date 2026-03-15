@@ -88,6 +88,8 @@ export interface ContinueDistributionParams {
   recipientAddresses: string[];
   amountPerRecipientBase: number;
   cluster?: "devnet" | "mainnet-beta";
+  /** Project ID – used to check if distribution was cancelled (deleted from S3) before each batch. */
+  projectId?: string;
   /** Called after each batch is sent so the client can update progress in real time. */
   onBatchComplete?: (signature: string) => void | Promise<void>;
 }
@@ -297,6 +299,14 @@ export async function continueSolanaDistribution(
   await delay(betweenRpcMs);
 
   for (let start = 0; start < addresses.length; start += BATCH_SIZE) {
+    if (params.projectId) {
+      const { getDistributionFromS3 } = await import("./airdropService");
+      const distribution = await getDistributionFromS3(params.projectId);
+      if (!distribution || distribution.status !== "in_progress") {
+        return { signatures, error: "Distribution cancelled" };
+      }
+    }
+
     const batch = addresses.slice(start, start + BATCH_SIZE);
     const tx = new Transaction();
 
