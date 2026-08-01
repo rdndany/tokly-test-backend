@@ -78,7 +78,7 @@ function inferRequestQuestionnaireFromAssistantContent(
   if (/\broadmap\b|phases?\s+and\s+milestones?/.test(lower)) return "roadmap";
   if (/\btokenomics\b|total\s+supply|token\s+allocations?/.test(lower)) return "tokenomics";
   if (/\btemplate\s+style\b|template\s+design|color\s+theme|color\s+scheme|\bfonts?\b/.test(lower)) return "template-style";
-  if (/\btemplate\s+layout\b|choose\s+template\b|\b(aurora|zynex|brick[- ]?rise|horizon[- ]?elite|apex)\b/.test(lower)) return "template";
+  if (/\btemplate\s+layout\b|choose\s+template\b|\b(aurora|zynex|brick[- ]?rise|horizon[- ]?elite|apex|velar)\b/.test(lower)) return "template";
   if (/\btemplate\b/.test(lower)) return "template";
   if (/\baudit\b|kyc\b|audit\s+report/.test(lower)) return "audit-kyc";
   if (/\blisting\s+platforms?|vote\s+listing/.test(lower)) return "listing-platforms";
@@ -450,26 +450,79 @@ export async function sendMessage(
   // GUARD: Token details required (address+chain or name+symbol for pre-launch).
   if (!hasToken) {
     if (parsed) {
-      const updated = await updateProjectTokenDetails(userId, projectId, {
-        address: parsed.address,
-        chain: parsed.chain,
-      });
-      const assistantContent = buildTokenBrief(updated.tokenDetails, updated.tokenSummary);
+      try {
+        const updated = await updateProjectTokenDetails(userId, projectId, {
+          address: parsed.address,
+          chain: parsed.chain,
+          fromQuestionnaire: true,
+        });
+        const assistantContent = buildTokenBrief(
+          updated.tokenDetails,
+          updated.tokenSummary
+        );
+        await ProjectChatMessageModel.create({
+          projectId: projectIdObj,
+          role: "assistant",
+          content: assistantContent,
+        });
+        emitChatAssistant(projectId, {
+          content: assistantContent,
+          createdAt: new Date().toISOString(),
+        });
+        const fullHistory = await getConversation(projectId, userId);
+        const creditsInfo = await getCredits(userId, workspaceId);
+        return {
+          message: assistantContent,
+          fullHistory,
+          creditsRemaining: creditsInfo.remaining,
+        };
+      } catch (err) {
+        const assistantContent =
+          err instanceof Error
+            ? err.message
+            : "Failed to verify token. Please check the address and blockchain, then try again.";
+        await ProjectChatMessageModel.create({
+          projectId: projectIdObj,
+          role: "assistant",
+          content: assistantContent,
+          responseTimeSeconds: 1,
+        });
+        emitChatAssistant(projectId, {
+          content: assistantContent,
+          responseTimeSeconds: 1,
+          createdAt: new Date().toISOString(),
+        });
+        const fullHistory = await getConversation(projectId, userId);
+        const creditsInfo = await getCredits(userId, workspaceId);
+        return {
+          message: assistantContent,
+          fullHistory,
+          creditsRemaining: creditsInfo.remaining,
+        };
+      }
+    }
+    // No token and couldn't parse - use AI to respond naturally and steer toward setup
+    if (!openai) {
+      const assistantContent =
+        "Hi! I'm here to help you create a crypto landing page. To get started, please complete the token setup questions above.";
       await ProjectChatMessageModel.create({
         projectId: projectIdObj,
         role: "assistant",
         content: assistantContent,
+        responseTimeSeconds: 1,
       });
-      emitChatAssistant(projectId, { content: assistantContent, createdAt: new Date().toISOString() });
+      emitChatAssistant(projectId, {
+        content: assistantContent,
+        responseTimeSeconds: 1,
+        createdAt: new Date().toISOString(),
+      });
       const fullHistory = await getConversation(projectId, userId);
-      const workspaceId = project.workspaceId?.toString();
       const creditsInfo = await getCredits(userId, workspaceId);
-      return { message: assistantContent, fullHistory, creditsRemaining: creditsInfo.remaining };
-    }
-    // No token and couldn't parse - use AI to respond naturally and steer toward setup
-    if (!openai) {
-      const fullHistory = await getConversation(projectId, userId);
-      return { message: "", fullHistory };
+      return {
+        message: assistantContent,
+        fullHistory,
+        creditsRemaining: creditsInfo.remaining,
+      };
     }
 
     const startTimeOnboard = Date.now();

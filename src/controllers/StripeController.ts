@@ -17,10 +17,8 @@ const MIN_AMOUNT_CENTS = 2500;
 const MAX_AMOUNT_CENTS = 300000;
 
 /**
- * POST body: { amountCents: number, creditsPerMonth: number, interval: "month" | "year", workspaceId?: string }
- * Creates a Stripe Checkout Session for Pro subscription.
- * When workspaceId is provided, subscribes the workspace to Pro (credits shared by members).
- * Otherwise subscribes the user (legacy).
+ * POST body: { planTier: "pro" | "studio" | "agency", interval: "month" | "year", workspaceId?: string }
+ * Creates a Stripe Checkout Session for a paid workspace tier.
  * Returns { url: string } to redirect the user to Stripe Checkout.
  */
 export async function createProCheckoutSession(
@@ -39,24 +37,32 @@ export async function createProCheckoutSession(
   }
 
   const body = req.body as {
-    amountCents?: number;
-    creditsPerMonth?: number;
+    planTier?: string;
     interval?: string;
     workspaceId?: string;
+    /** @deprecated Legacy credit-based checkout */
+    amountCents?: number;
+    creditsPerMonth?: number;
   };
 
-  const amountCents = typeof body.amountCents === "number" ? body.amountCents : 0;
-  const creditsPerMonth =
-    typeof body.creditsPerMonth === "number" ? body.creditsPerMonth : 100;
-  const interval =
-    body.interval === "year" ? "year" : "month";
+  const { isPaidPlanTier, PLAN_TIER_CONFIG, annualPriceFromMonthly } = await import("../config/plans");
 
-  if (amountCents < MIN_AMOUNT_CENTS || amountCents > MAX_AMOUNT_CENTS) {
-    res.status(400).json({
-      error: `Amount must be between $${MIN_AMOUNT_CENTS / 100} and $${MAX_AMOUNT_CENTS / 100} per month`,
-    });
+  let planTier = body.planTier;
+  if (!planTier && body.creditsPerMonth) {
+    planTier = "pro";
+  }
+  if (!planTier || !isPaidPlanTier(planTier)) {
+    res.status(400).json({ error: "Valid planTier is required (pro, studio, or agency)" });
     return;
   }
+
+  const tierConfig = PLAN_TIER_CONFIG[planTier];
+  const interval = body.interval === "year" ? "year" : "month";
+  const amountCents =
+    interval === "year"
+      ? Math.round(annualPriceFromMonthly(tierConfig.monthlyPriceUsd).totalYearUsd * 100)
+      : Math.round(tierConfig.monthlyPriceUsd * 100);
+  const creditsPerMonth = tierConfig.flexCreditsPerMonth;
 
   const workspaceId = typeof body.workspaceId === "string" ? body.workspaceId : undefined;
   let workspaceName: string | undefined;
@@ -98,8 +104,8 @@ export async function createProCheckoutSession(
 
   const productName =
     interval === "year"
-      ? `Pro Plan — ${creditsPerMonth.toLocaleString()} credits/month (annual)`
-      : `Pro Plan — ${creditsPerMonth.toLocaleString()} credits/month`;
+      ? `${tierConfig.name} Plan (annual)`
+      : `${tierConfig.name} Plan`;
 
   try {
     const session = await stripe.checkout.sessions.create({
@@ -108,6 +114,7 @@ export async function createProCheckoutSession(
       client_reference_id: userId,
       metadata: {
         userId,
+        planTier,
         creditsPerMonth: String(creditsPerMonth),
         interval,
         ...(workspaceId && { workspaceId }),
@@ -120,7 +127,7 @@ export async function createProCheckoutSession(
             currency: "usd",
             product_data: {
               name: productName,
-              description: `${creditsPerMonth.toLocaleString()} credits per month${interval === "year" ? " · billed annually" : ""}`,
+              description: `${tierConfig.liveSites} live sites · ${creditsPerMonth.toLocaleString()} credits/month${interval === "year" ? " · billed annually" : ""}`,
             },
             unit_amount: amountCents,
             recurring: { interval },
@@ -194,8 +201,8 @@ export async function createTopUpCheckoutSession(
   }
 
   const ws = await WorkspaceModel.findById(workspaceId).select("planStatus").lean();
-  if (ws?.planStatus !== "pro") {
-    res.status(400).json({ error: "Workspace must be Pro to add top-up credits" });
+  if (!ws?.planStatus || !["pro", "studio", "agency"].includes(ws.planStatus)) {
+    res.status(400).json({ error: "Workspace must be on a paid plan to add top-up credits" });
     return;
   }
 
@@ -417,9 +424,12 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
       typeof session.metadata?.creditsPerMonth === "string"
         ? parseInt(session.metadata.creditsPerMonth, 10)
         : 100;
+    const planTierRaw = session.metadata?.planTier;
+    const { isPaidPlanTier, PLAN_TIER_CONFIG } = await import("../config/plans");
+    const planTier = planTierRaw && isPaidPlanTier(planTierRaw) ? planTierRaw : "pro";
     const safeCredits = Number.isFinite(creditsPerMonth) && creditsPerMonth > 0
       ? creditsPerMonth
-      : 100;
+      : PLAN_TIER_CONFIG[planTier].flexCreditsPerMonth;
 
     const subscriptionId = session.subscription
       ? (typeof session.subscription === "string" ? session.subscription : session.subscription.id)
@@ -430,7 +440,7 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
         const interval = session.metadata?.interval === "year" ? "year" : "month";
         await WorkspaceModel.findByIdAndUpdate(workspaceId, {
           $set: {
-            planStatus: "pro",
+            planStatus: planTier,
             proCreditsPerMonth: safeCredits,
             stripeSubscriptionId: subscriptionId,
             stripeSubscriptionInterval: interval,
@@ -454,9 +464,10 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
             });
           }
         }
-        logger.info("Stripe webhook: workspace upgraded to Pro", {
+        logger.info("Stripe webhook: workspace upgraded", {
           workspaceId,
           userId,
+          planTier,
           creditsPerMonth: safeCredits,
         });
       } else {
@@ -519,6 +530,35 @@ export async function stripeWebhook(req: Request, res: Response): Promise<void> 
         subscriptionId,
         err,
       });
+    }
+  }
+
+  if (event.type === "customer.subscription.deleted") {
+    const subscription = event.data.object as Stripe.Subscription;
+    const subscriptionId = subscription.id;
+    try {
+      const workspace = await WorkspaceModel.findOne({ stripeSubscriptionId: subscriptionId })
+        .select("_id createdBy createdAt")
+        .lean();
+      if (workspace) {
+        const ownerWorkspaces = await WorkspaceModel.find({ createdBy: workspace.createdBy })
+          .sort({ createdAt: 1 })
+          .select("_id")
+          .lean();
+        const isPrimaryWorkspace =
+          ownerWorkspaces.length > 0 &&
+          ownerWorkspaces[0]._id.toString() === workspace._id.toString();
+        await WorkspaceModel.findByIdAndUpdate(workspace._id, {
+          $set: { planStatus: isPrimaryWorkspace ? "free" : "inactive" },
+          $unset: { stripeSubscriptionId: "", proCreditsPerMonth: "", stripeSubscriptionInterval: "" },
+        });
+        logger.info("Stripe webhook: workspace downgraded after cancellation", {
+          workspaceId: workspace._id,
+          planStatus: isPrimaryWorkspace ? "free" : "inactive",
+        });
+      }
+    } catch (err) {
+      logger.error("Stripe webhook: failed to downgrade workspace", { subscriptionId, err });
     }
   }
 

@@ -1,17 +1,17 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export type WorkspacePlanStatus = "free" | "inactive" | "pro";
+export type WorkspacePlanStatus = "free" | "inactive" | "pro" | "studio" | "agency";
 
 export interface WorkspaceDocument extends Document {
   _id: mongoose.Types.ObjectId;
   name: string;
   avatar?: string;
   createdBy: string;
-  /** free = default workspace, inactive = created but unpaid, pro = has subscription */
+  /** free = default workspace, inactive = created but unpaid, pro/studio/agency = paid tiers */
   planStatus?: WorkspacePlanStatus;
-  /** Stripe subscription ID when workspace is Pro */
+  /** Stripe subscription ID when workspace is on a paid tier */
   stripeSubscriptionId?: string;
-  /** Pro flex credits per month (from subscription). Used when planStatus is pro. */
+  /** Flex credits per month (from subscription). Used when planStatus is a paid tier. */
   proCreditsPerMonth?: number;
   /** Billing interval from Stripe subscription. Affects rollover: monthly = 1 month, annual = until end of year. */
   stripeSubscriptionInterval?: "month" | "year";
@@ -42,7 +42,7 @@ const workspaceSchema = new Schema<WorkspaceDocument>(
     },
     planStatus: {
       type: String,
-      enum: ["free", "inactive", "pro"],
+      enum: ["free", "inactive", "pro", "studio", "agency"],
       default: undefined,
     },
     stripeSubscriptionId: { type: String, trim: true, sparse: true },

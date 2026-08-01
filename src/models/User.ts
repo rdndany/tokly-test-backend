@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export type PlanId = "free" | "pro";
+export type PlanId = "free" | "pro" | "studio" | "agency";
 
 export interface UserDocument extends Omit<Document, "_id"> {
   _id: string;
@@ -81,7 +81,7 @@ const userSchema = new Schema<UserDocument>({
   },
   plan: {
     type: String,
-    enum: ["free", "pro"],
+    enum: ["free", "pro", "studio", "agency"],
     default: "free",
   },
   proCreditsPerMonth: {

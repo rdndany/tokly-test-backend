@@ -64,6 +64,7 @@ import {
   getWorkspacePlanStatus,
   listWorkspacesByUser,
 } from "../services/workspaceService";
+import { isPaidPlan } from "../config/plans";
 
 export async function listProjects(req: Request, res: Response): Promise<void> {
   const userId = req.auth?.userId;
@@ -1121,10 +1122,10 @@ export async function updateSectionVisibility(
           const workspaceId = project.workspaceId?.toString();
           if (workspaceId) {
             const planStatus = await getWorkspacePlanStatus(workspaceId);
-            if (planStatus !== "pro") {
+            if (!isPaidPlan(planStatus)) {
               const names: Record<string, string> = { whitelist: "Whitelist", airdrop: "Airdrop" };
               res.status(403).json({
-                error: `Pro plan is required to enable the ${names[sectionId]} section.`,
+                error: `A paid plan is required to enable the ${names[sectionId]} section.`,
               });
               return;
             }

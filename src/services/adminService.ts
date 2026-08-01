@@ -1,4 +1,5 @@
 import type { PipelineStage } from "mongoose";
+import mongoose from "mongoose";
 import UserModel from "../models/User";
 import ProjectModel from "../models/Project";
 import ProjectFolderModel from "../models/ProjectFolder";
@@ -13,7 +14,8 @@ import {
   fetchStripeChargeSummary,
   fetchStripeActiveSubscriptionCount,
 } from "./stripeRevenueService";
-import { PRO_FLEX_CREDITS_DEFAULT } from "../config/planLimits";
+import { PRO_FLEX_CREDITS_DEFAULT, FLEX_CREDITS_DEFAULT } from "../config/planLimits";
+import { isPaidPlan, getFlexCreditsForPlan, type PaidPlanTier } from "../config/plans";
 import type { WorkspacePlanStatus } from "../models/Workspace";
 
 export interface AdminDashboardStats {
@@ -609,16 +611,17 @@ export async function updateWorkspaceById(
 
   if (input.planStatus !== undefined) {
     updates.planStatus = input.planStatus;
-    if (input.planStatus === "pro") {
+    if (isPaidPlan(input.planStatus)) {
       updates.proCreditsPerMonth =
-        input.proCreditsPerMonth ?? workspace.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT;
-      // Admin grant: leave stripeSubscriptionId as-is if already set; otherwise leave unset
-    } else if (input.planStatus === "free") {
+        input.proCreditsPerMonth ??
+        workspace.proCreditsPerMonth ??
+        FLEX_CREDITS_DEFAULT[input.planStatus as PaidPlanTier];
+    } else if (input.planStatus === "free" || input.planStatus === "inactive") {
       updates.stripeSubscriptionId = undefined;
       updates.stripeSubscriptionInterval = undefined;
       updates.proCreditsPerMonth = undefined;
     }
-  } else if (input.proCreditsPerMonth !== undefined && workspace.planStatus === "pro") {
+  } else if (input.proCreditsPerMonth !== undefined && isPaidPlan(workspace.planStatus)) {
     updates.proCreditsPerMonth = input.proCreditsPerMonth;
   }
 
@@ -815,6 +818,511 @@ export async function getProjects(options?: {
   const total = result?.total?.[0]?.count ?? 0;
 
   return { projects, total };
+}
+
+export type AdminAirdropDistributionSummary = {
+  source: "s3" | "mongo";
+  status: string;
+  network?: string;
+  initiatedAt?: string;
+  totalRecipients?: number;
+  amountPerRecipient?: string;
+  batchCount: number;
+  batchesWithTx: number;
+};
+
+export type AdminAirdropListItem = {
+  projectId: string;
+  title: string;
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  workspaceId?: string | null;
+  workspaceName?: string;
+  published: boolean;
+  projectVisibility?: string;
+  projectChain?: string;
+  airdropSectionVisible: boolean;
+  airdropKind: "solana" | "evm" | "unknown";
+  recipientCount: number;
+  airdropConfig: {
+    contractAddress?: string;
+    contractOwner?: string;
+    chain?: string;
+    taskType?: string;
+    status?: string;
+    distributionInS3?: boolean;
+    solanaAirdropByOwner?: Record<string, string>;
+    eligibilityTasks?: Array<{ type: string; url?: string; label?: string }>;
+    participationRequirements?: Array<Record<string, unknown>>;
+  };
+  distributionSummary: AdminAirdropDistributionSummary | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GetAdminAirdropsResult = {
+  airdrops: AdminAirdropListItem[];
+  total: number;
+};
+
+function inferAirdropAdminKind(
+  tokenChain: string | undefined,
+  ac: {
+    chain?: string;
+    contractAddress?: string;
+    solanaAirdropByOwner?: Record<string, string>;
+  }
+): "solana" | "evm" | "unknown" {
+  const chainLower = (ac.chain ?? "").toLowerCase();
+  if (chainLower === "mainnet-beta" || chainLower === "devnet") return "solana";
+  if (ac.solanaAirdropByOwner && Object.keys(ac.solanaAirdropByOwner).length > 0) return "solana";
+  const tc = (tokenChain ?? "").toLowerCase().trim();
+  if (tc === "solana" || tc === "sol") return "solana";
+  const addr = (ac.contractAddress ?? "").trim();
+  if (addr.startsWith("0x")) return "evm";
+  if (
+    [
+      "ethereum",
+      "eth",
+      "base",
+      "bsc",
+      "bnb",
+      "polygon",
+      "matic",
+      "monad",
+      "arbitrum",
+      "optimism",
+    ].includes(tc) ||
+    /^\d+$/.test(tc)
+  ) {
+    return "evm";
+  }
+  if (addr.length > 0 && !addr.startsWith("0x")) return "solana";
+  return "unknown";
+}
+
+function summarizeAirdropDistribution(
+  dist: {
+    status: string;
+    network?: string;
+    initiatedAt?: string;
+    batches?: Array<{ tx?: string }>;
+    amountPerRecipient?: string;
+    totalRecipients?: number;
+  } | null
+): AdminAirdropDistributionSummary | null {
+  if (!dist) return null;
+  const batches = dist.batches ?? [];
+  const batchesWithTx = batches.filter((b) => Boolean(b.tx?.trim())).length;
+  return {
+    source: "mongo",
+    status: dist.status,
+    network: dist.network,
+    initiatedAt: dist.initiatedAt,
+    totalRecipients: dist.totalRecipients,
+    amountPerRecipient: dist.amountPerRecipient,
+    batchCount: batches.length,
+    batchesWithTx,
+  };
+}
+
+/**
+ * Projects that have airdropConfig set, with S3 recipient counts and distribution summary.
+ */
+export async function getAdminAirdropsOverview(options?: {
+  search?: string;
+  page?: number;
+  limit?: number;
+}): Promise<GetAdminAirdropsResult> {
+  const page = Math.max(1, options?.page ?? 1);
+  const limit = Math.min(100, Math.max(1, options?.limit ?? DEFAULT_PAGE_SIZE));
+  const skip = (page - 1) * limit;
+  const q = options?.search?.trim();
+
+  const pipeline: PipelineStage[] = [
+    { $match: { airdropConfig: { $exists: true, $ne: null } } },
+    { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "userDoc" } },
+    { $unwind: { path: "$userDoc", preserveNullAndEmptyArrays: true } },
+    { $lookup: { from: "workspaces", localField: "workspaceId", foreignField: "_id", as: "wsDoc" } },
+    { $unwind: { path: "$wsDoc", preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        userName: { $ifNull: ["$userDoc.name", "—"] },
+        userEmail: "$userDoc.email",
+        workspaceName: { $ifNull: ["$wsDoc.name", "—"] },
+      },
+    },
+  ];
+
+  if (q) {
+    const escaped = escapeRegex(q);
+    const re = new RegExp(escaped, "i");
+    pipeline.push({
+      $match: {
+        $or: [
+          { title: { $regex: re } },
+          { userName: { $regex: re } },
+          { userEmail: { $regex: re } },
+          { workspaceName: { $regex: re } },
+          { "airdropConfig.contractAddress": { $regex: re } },
+          { "airdropConfig.contractOwner": { $regex: re } },
+        ],
+      },
+    } as PipelineStage);
+  }
+
+  pipeline.push({ $sort: { updatedAt: -1 } });
+  pipeline.push({
+    $facet: {
+      rows: [
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            userId: 1,
+            userName: 1,
+            userEmail: 1,
+            workspaceId: 1,
+            workspaceName: 1,
+            published: 1,
+            projectVisibility: 1,
+            sectionVisibility: 1,
+            tokenChain: "$tokenDetails.chain",
+            createdAt: 1,
+            updatedAt: 1,
+            airdropConfig: {
+              contractAddress: "$airdropConfig.contractAddress",
+              contractOwner: "$airdropConfig.contractOwner",
+              chain: "$airdropConfig.chain",
+              taskType: "$airdropConfig.taskType",
+              status: "$airdropConfig.status",
+              distributionInS3: "$airdropConfig.distributionInS3",
+              eligibilityTasks: "$airdropConfig.eligibilityTasks",
+              participationRequirements: "$airdropConfig.participationRequirements",
+              solanaAirdropByOwner: "$airdropConfig.solanaAirdropByOwner",
+              mongoDistribution: "$airdropConfig.distribution",
+            },
+          },
+        },
+      ],
+      total: [{ $count: "count" }],
+    },
+  });
+
+  type AggRow = {
+    _id: unknown;
+    title?: string;
+    userId: string;
+    userName: string;
+    userEmail?: string;
+    workspaceId?: unknown;
+    workspaceName: string;
+    published?: boolean;
+    projectVisibility?: string;
+    sectionVisibility?: Record<string, boolean>;
+    tokenChain?: string;
+    createdAt: Date;
+    updatedAt: Date;
+    airdropConfig?: {
+      contractAddress?: string;
+      contractOwner?: string;
+      chain?: string;
+      taskType?: string;
+      status?: string;
+      distributionInS3?: boolean;
+      eligibilityTasks?: Array<{ type: string; url?: string; label?: string }>;
+      participationRequirements?: Array<Record<string, unknown>>;
+      solanaAirdropByOwner?: Record<string, string>;
+      mongoDistribution?: {
+        initiatedAt?: Date | string;
+        network?: string;
+        status?: string;
+        batches?: Array<{
+          batchIndex: number;
+          recipients: number;
+          amountTokens: string;
+          status: string;
+          tx?: string;
+        }>;
+        amountPerRecipient?: string;
+        totalRecipients?: number;
+      };
+    };
+  };
+
+  const [agg] = await ProjectModel.aggregate<{ rows: AggRow[]; total: Array<{ count: number }> }>(
+    pipeline
+  );
+
+  const rows = agg?.rows ?? [];
+  const total = agg?.total?.[0]?.count ?? 0;
+
+  const { getAirdropData, getDistributionFromS3 } = await import("./airdropService");
+
+  const airdrops: AdminAirdropListItem[] = await Promise.all(
+    rows.map(async (row) => {
+      const projectId = String(row._id);
+      const acRaw = row.airdropConfig ?? {};
+      const { mongoDistribution, ...ac } = acRaw;
+
+      const [entryData, s3Distribution] = await Promise.all([
+        getAirdropData(projectId),
+        ac.distributionInS3 ? getDistributionFromS3(projectId) : Promise.resolve(null),
+      ]);
+
+      let distributionSummary: AdminAirdropDistributionSummary | null = null;
+      if (s3Distribution) {
+        const batches = s3Distribution.batches ?? [];
+        const batchesWithTx = batches.filter((b) => Boolean(b.tx?.trim())).length;
+        distributionSummary = {
+          source: "s3",
+          status: s3Distribution.status,
+          network: s3Distribution.network,
+          initiatedAt: s3Distribution.initiatedAt,
+          totalRecipients: s3Distribution.totalRecipients,
+          amountPerRecipient: s3Distribution.amountPerRecipient,
+          batchCount: batches.length,
+          batchesWithTx,
+        };
+      } else if (mongoDistribution) {
+        const md = mongoDistribution;
+        const initiatedRaw = md.initiatedAt;
+        const initiatedAt =
+          initiatedRaw instanceof Date
+            ? initiatedRaw.toISOString()
+            : typeof initiatedRaw === "string"
+              ? initiatedRaw
+              : undefined;
+        distributionSummary = summarizeAirdropDistribution({
+          status: String(md.status ?? ""),
+          network: md.network,
+          initiatedAt,
+          batches: md.batches,
+          amountPerRecipient: md.amountPerRecipient,
+          totalRecipients: md.totalRecipients,
+        });
+      }
+
+      return {
+        projectId,
+        title: row.title ?? "Untitled",
+        userId: row.userId,
+        userName: row.userName,
+        userEmail: row.userEmail,
+        workspaceId: row.workspaceId ? String(row.workspaceId) : null,
+        workspaceName: row.workspaceName,
+        published: Boolean(row.published),
+        projectVisibility: row.projectVisibility,
+        projectChain: row.tokenChain,
+        airdropSectionVisible: row.sectionVisibility?.airdrop === true,
+        airdropKind: inferAirdropAdminKind(row.tokenChain, ac),
+        recipientCount: entryData.entries.length,
+        airdropConfig: ac,
+        distributionSummary,
+        createdAt:
+          row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+        updatedAt:
+          row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
+      };
+    })
+  );
+
+  return { airdrops, total };
+}
+
+export type AdminWhitelistListSummary = {
+  id: string;
+  name: string;
+  entryCount: number;
+};
+
+export type AdminWhitelistListItem = {
+  projectId: string;
+  title: string;
+  userId: string;
+  userName: string;
+  userEmail?: string;
+  workspaceId?: string | null;
+  workspaceName?: string;
+  published: boolean;
+  projectVisibility?: string;
+  projectChain?: string;
+  whitelistSectionVisible: boolean;
+  /** True when an object exists in S3 under whitelist/projects/{id}.* */
+  hasWhitelistStorageInS3: boolean;
+  listCount: number;
+  /** Sum of entries across lists (same address may appear in multiple lists). */
+  totalEntries: number;
+  lists: AdminWhitelistListSummary[];
+  sectionWhitelistCustomization?: { customText?: string; layout?: { type?: string } };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GetAdminWhitelistsResult = {
+  whitelists: AdminWhitelistListItem[];
+  total: number;
+};
+
+/**
+ * Projects using whitelist: union of S3 whitelist objects and projects with the whitelist section enabled.
+ * Each row is enriched with list summaries from S3 via getWhitelistData.
+ */
+export async function getAdminWhitelistsOverview(options?: {
+  search?: string;
+  page?: number;
+  limit?: number;
+}): Promise<GetAdminWhitelistsResult> {
+  const page = Math.max(1, options?.page ?? 1);
+  const limit = Math.min(100, Math.max(1, options?.limit ?? DEFAULT_PAGE_SIZE));
+  const skip = (page - 1) * limit;
+  const q = options?.search?.trim();
+
+  const { listProjectIdsWithWhitelistInS3, getWhitelistData } = await import("./whitelistService");
+
+  const [s3ProjectIds, mongoIdDocs] = await Promise.all([
+    listProjectIdsWithWhitelistInS3(),
+    ProjectModel.find({ "sectionVisibility.whitelist": true }).select("_id").lean(),
+  ]);
+
+  const s3Set = new Set(s3ProjectIds);
+  const idSet = new Set<string>(s3ProjectIds);
+  for (const doc of mongoIdDocs as { _id: unknown }[]) {
+    idSet.add(String(doc._id));
+  }
+
+  const objectIds = [...idSet]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  if (objectIds.length === 0) {
+    return { whitelists: [], total: 0 };
+  }
+
+  const pipeline: PipelineStage[] = [
+    { $match: { _id: { $in: objectIds } } },
+    { $lookup: { from: "users", localField: "userId", foreignField: "_id", as: "userDoc" } },
+    { $unwind: { path: "$userDoc", preserveNullAndEmptyArrays: true } },
+    { $lookup: { from: "workspaces", localField: "workspaceId", foreignField: "_id", as: "wsDoc" } },
+    { $unwind: { path: "$wsDoc", preserveNullAndEmptyArrays: true } },
+    {
+      $addFields: {
+        userName: { $ifNull: ["$userDoc.name", "—"] },
+        userEmail: "$userDoc.email",
+        workspaceName: { $ifNull: ["$wsDoc.name", "—"] },
+      },
+    },
+  ];
+
+  if (q) {
+    const escaped = escapeRegex(q);
+    const re = new RegExp(escaped, "i");
+    pipeline.push({
+      $match: {
+        $or: [
+          { title: { $regex: re } },
+          { userName: { $regex: re } },
+          { userEmail: { $regex: re } },
+          { workspaceName: { $regex: re } },
+        ],
+      },
+    } as PipelineStage);
+  }
+
+  pipeline.push({ $sort: { updatedAt: -1 } });
+  pipeline.push({
+    $facet: {
+      rows: [
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            userId: 1,
+            userName: 1,
+            userEmail: 1,
+            workspaceId: 1,
+            workspaceName: 1,
+            published: 1,
+            projectVisibility: 1,
+            sectionVisibility: 1,
+            sectionWhitelistCustomization: "$sectionCustomization.whitelist",
+            tokenChain: "$tokenDetails.chain",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      total: [{ $count: "count" }],
+    },
+  });
+
+  type WhitelistAggRow = {
+    _id: unknown;
+    title?: string;
+    userId: string;
+    userName: string;
+    userEmail?: string;
+    workspaceId?: unknown;
+    workspaceName: string;
+    published?: boolean;
+    projectVisibility?: string;
+    sectionVisibility?: Record<string, boolean>;
+    sectionWhitelistCustomization?: { customText?: string; layout?: { type?: string } };
+    tokenChain?: string;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+
+  const [agg] = await ProjectModel.aggregate<{
+    rows: WhitelistAggRow[];
+    total: Array<{ count: number }>;
+  }>(pipeline);
+
+  const rows = agg?.rows ?? [];
+  const total = agg?.total?.[0]?.count ?? 0;
+
+  const whitelists: AdminWhitelistListItem[] = await Promise.all(
+    rows.map(async (row) => {
+      const projectId = String(row._id);
+      const data = await getWhitelistData(projectId);
+      const lists = (data.lists ?? []).map((l) => ({
+        id: l.id,
+        name: l.name,
+        entryCount: l.entries.length,
+      }));
+      const totalEntries = lists.reduce((s, l) => s + l.entryCount, 0);
+
+      return {
+        projectId,
+        title: row.title ?? "Untitled",
+        userId: row.userId,
+        userName: row.userName,
+        userEmail: row.userEmail,
+        workspaceId: row.workspaceId ? String(row.workspaceId) : null,
+        workspaceName: row.workspaceName,
+        published: Boolean(row.published),
+        projectVisibility: row.projectVisibility,
+        projectChain: row.tokenChain,
+        whitelistSectionVisible: row.sectionVisibility?.whitelist === true,
+        hasWhitelistStorageInS3: s3Set.has(projectId),
+        listCount: lists.length,
+        totalEntries,
+        lists,
+        sectionWhitelistCustomization: row.sectionWhitelistCustomization,
+        createdAt:
+          row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt),
+        updatedAt:
+          row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt),
+      };
+    })
+  );
+
+  return { whitelists, total };
 }
 
 /**
@@ -1015,7 +1523,7 @@ export async function getUserById(userId: string): Promise<AdminUserDetail | nul
     createdAt: p.createdAt ? new Date(p.createdAt as Date).toISOString() : "",
   }));
 
-  const subscriptionsCount = workspaces.filter((w) => w.planStatus === "pro").length;
+  const subscriptionsCount = workspaces.filter((w) => isPaidPlan(w.planStatus)).length;
   const totalPaid = (payments as { priceAmount?: number }[]).reduce(
     (sum, p) => sum + (p.priceAmount ?? 0),
     0

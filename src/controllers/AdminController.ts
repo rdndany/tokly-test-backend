@@ -80,6 +80,36 @@ export async function getProjects(req: Request, res: Response): Promise<void> {
   }
 }
 
+export async function getAdminAirdrops(req: Request, res: Response): Promise<void> {
+  try {
+    const search = (req.query.q as string) || undefined;
+    const page = req.query.page ? Number(req.query.page) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const result = await AdminService.getAdminAirdropsOverview({ search, page, limit });
+    res.status(HTTPSTATUS.OK).json(result);
+  } catch (error) {
+    logger.error("Error fetching admin airdrops", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({
+      message: "Failed to fetch airdrops",
+    });
+  }
+}
+
+export async function getAdminWhitelists(req: Request, res: Response): Promise<void> {
+  try {
+    const search = (req.query.q as string) || undefined;
+    const page = req.query.page ? Number(req.query.page) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    const result = await AdminService.getAdminWhitelistsOverview({ search, page, limit });
+    res.status(HTTPSTATUS.OK).json(result);
+  } catch (error) {
+    logger.error("Error fetching admin whitelists", error);
+    res.status(HTTPSTATUS.INTERNAL_SERVER_ERROR).json({
+      message: "Failed to fetch whitelists",
+    });
+  }
+}
+
 export async function getWorkspaceById(req: Request, res: Response): Promise<void> {
   try {
     const workspaceId = req.params.workspaceId;

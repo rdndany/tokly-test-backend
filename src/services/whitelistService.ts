@@ -1,9 +1,40 @@
 import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { s3Client, S3_CONFIG } from "../config/aws";
 
-const WHITELIST_PREFIX = "whitelist/projects/";
+export const WHITELIST_S3_PREFIX = "whitelist/projects/";
+const WHITELIST_PREFIX = WHITELIST_S3_PREFIX;
 const LEGACY_SUFFIX = ".txt";
 const JSON_SUFFIX = ".json";
+
+/** Match whitelist storage keys: `whitelist/projects/{projectId}.json` or `.txt` */
+const WHITELIST_STORAGE_KEY_RE = /^whitelist\/projects\/([^.]+)\.(json|txt)$/;
+
+/**
+ * Project IDs that have at least one whitelist JSON or legacy TXT object in S3.
+ * Used by admin overview (paginated per-project reads still use getWhitelistData).
+ */
+export async function listProjectIdsWithWhitelistInS3(): Promise<string[]> {
+  const { ListObjectsV2Command } = await import("@aws-sdk/client-s3");
+  const ids = new Set<string>();
+  let continuationToken: string | undefined;
+  do {
+    const resp = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: S3_CONFIG.BUCKET_NAME,
+        Prefix: WHITELIST_PREFIX,
+        ContinuationToken: continuationToken,
+        MaxKeys: 1000,
+      })
+    );
+    for (const obj of resp.Contents ?? []) {
+      const key = obj.Key ?? "";
+      const m = key.match(WHITELIST_STORAGE_KEY_RE);
+      if (m) ids.add(m[1]);
+    }
+    continuationToken = resp.IsTruncated ? resp.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return [...ids];
+}
 
 const DEFAULT_LIST_NAME = "Personal Whitelist";
 

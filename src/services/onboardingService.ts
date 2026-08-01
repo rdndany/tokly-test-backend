@@ -93,7 +93,11 @@ export async function completeOnboarding(
   }
 
   const update: Record<string, unknown> = { updatedAt: getNow() };
-  if (fullName !== undefined) update.fullName = fullName;
+  if (fullName !== undefined) {
+    const trimmedFullName = fullName.trim();
+    update.fullName = trimmedFullName;
+    if (trimmedFullName) update.name = trimmedFullName;
+  }
   if (companyRole !== undefined) update.companyRole = companyRole;
   if (companySize !== undefined) update.companySize = companySize;
   if (theme) update.theme = theme;

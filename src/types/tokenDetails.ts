@@ -102,6 +102,13 @@ export interface TokenDetails {
   name?: string;
   symbol?: string;
   logo?: string;
+  description?: string;
+  social?: {
+    twitter?: string;
+    telegram?: string;
+    discord?: string;
+    website?: string;
+  };
   launchType?: string;
   launchPlatformUrl?: string;
   tokenFeatures?: TokenFeatures;

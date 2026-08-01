@@ -9,6 +9,8 @@ import {
   getWorkspaceById,
   patchWorkspace,
   getProjects,
+  getAdminAirdrops,
+  getAdminWhitelists,
   getProjectById,
   updateUserRole,
   removeUser,
@@ -35,6 +37,8 @@ router.get("/workspaces", checkAdminAuth, getWorkspaces);
 router.get("/workspaces/:workspaceId", checkAdminAuth, getWorkspaceById);
 router.patch("/workspaces/:workspaceId", checkAdminAuth, patchWorkspace);
 router.get("/projects", checkAdminAuth, getProjects);
+router.get("/airdrops", checkAdminAuth, getAdminAirdrops);
+router.get("/whitelists", checkAdminAuth, getAdminWhitelists);
 router.get("/projects/:projectId", checkAdminAuth, getProjectById);
 router.post("/projects/:projectId/refresh-token-details", checkAdminAuth, refreshProjectTokenDetailsHandler);
 router.get("/logs/token-updates", checkAdminAuth, getTokenUpdateLogsHandler);

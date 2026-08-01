@@ -27,6 +27,7 @@ import {
   getMemberRole,
   getWorkspacePlanStatus,
 } from "./workspaceService";
+import { getLiveSiteLimit, getPlanLabel, isPaidPlan } from "../config/plans";
 import { emitProjectUpdated, emitProjectsUpdated } from "../socket/events";
 import { logProjectChange } from "./projectHistoryService";
 import { VercelService } from "./vercelService";
@@ -85,7 +86,9 @@ const openai = config.openai.apiKey
   ? new OpenAI({ apiKey: config.openai.apiKey })
   : null;
 
-async function generateHeroText(descriptionPlainText: string): Promise<string> {
+export async function generateHeroTextFromPlainDescription(
+  descriptionPlainText: string
+): Promise<string> {
   if (!openai || !descriptionPlainText.trim()) return "";
   try {
     const completion = await openai.chat.completions.create({
@@ -107,6 +110,59 @@ async function generateHeroText(descriptionPlainText: string): Promise<string> {
     return text && text.length <= 200 ? text : "";
   } catch {
     return "";
+  }
+}
+
+export const PARTNER_CREATE_DESCRIPTION_MAX_LENGTH = 500;
+
+/** Strip emojis/icons and normalize whitespace for partner create copy. */
+export function sanitizePartnerCreatePlainDescription(text: string): string {
+  return text
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, "")
+    .replace(/[\u{2600}-\u{27BF}]/gu, "")
+    .replace(/[\u{FE00}-\u{FE0F}]/gu, "")
+    .replace(/[\u{200D}\u{20E3}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, PARTNER_CREATE_DESCRIPTION_MAX_LENGTH);
+}
+
+/** Rewrite a Mobula/raw token description for the partner create flow. */
+export async function rewritePlainDescriptionForPartnerCreate(
+  sourcePlainText: string
+): Promise<string> {
+  const trimmed = sourcePlainText.trim();
+  if (!trimmed) return "";
+
+  const sanitizedSource = sanitizePartnerCreatePlainDescription(trimmed);
+  if (!openai) {
+    return sanitizedSource;
+  }
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You rewrite crypto token descriptions for memecoin landing pages. Output plain text only. Maximum 500 characters. No emojis, icons, decorative symbols, hashtags, markdown, bullet points, or URLs. Write 2-4 clear sentences in a neutral marketing tone. Output only the rewritten description, nothing else.",
+        },
+        {
+          role: "user",
+          content: `Rewrite this token description:\n\n${trimmed.slice(0, 4000)}`,
+        },
+      ],
+      max_tokens: 220,
+    });
+    const text = completion.choices[0]?.message?.content?.trim();
+    if (!text) {
+      return sanitizedSource;
+    }
+    const cleaned = sanitizePartnerCreatePlainDescription(text);
+    return cleaned || sanitizedSource;
+  } catch {
+    return sanitizedSource;
   }
 }
 
@@ -189,7 +245,7 @@ export async function generateHeroTextForProject(
     options?.description?.trim() ?? project.description ?? "";
   const descPlain = extractLexicalText(descRaw);
   if (!descPlain.trim()) return null;
-  const generated = await generateHeroText(descPlain);
+  const generated = await generateHeroTextFromPlainDescription(descPlain);
   if (!generated) return null;
   return { heroText: plainTextToLexicalJSON(generated) };
 }
@@ -592,6 +648,20 @@ export async function updateProjectPublishAddress(
     throw new Error("This URL is already taken by another project");
   }
 
+  if (workspaceId && !project.published) {
+    const planStatus = await getWorkspacePlanStatus(workspaceId);
+    const liveSiteLimit = getLiveSiteLimit(planStatus);
+    const publishedCount = await ProjectModel.countDocuments({
+      workspaceId: new mongoose.Types.ObjectId(workspaceId),
+      published: true,
+    });
+    if (publishedCount >= liveSiteLimit) {
+      throw new Error(
+        `Your ${getPlanLabel(planStatus)} plan includes ${liveSiteLimit} live site${liveSiteLimit === 1 ? "" : "s"}. Upgrade your plan to publish more.`
+      );
+    }
+  }
+
   await ProjectModel.updateOne(
     { _id: projectId },
     { $set: { subdomain, domain, published: true } }
@@ -599,6 +669,46 @@ export async function updateProjectPublishAddress(
   const updated = await getProjectById(projectId);
   if (!updated) throw new Error("Project not found");
   logProjectChange(projectId, userId, "Updated publish address", "general");
+  emitProjectUpdated(projectId);
+  return updated;
+}
+
+/** Reserve publish URL on a project without publishing. Validates uniqueness. */
+export async function reserveProjectPublishAddress(
+  userId: string,
+  projectId: string,
+  input: { subdomain: string; domain: string }
+) {
+  const project = await getProjectById(projectId);
+  if (!project) throw new Error("Project not found");
+  const workspaceId = project.workspaceId?.toString();
+  if (workspaceId) {
+    await ensureUserCanManageWorkspace(userId, workspaceId);
+  } else {
+    if (project.userId !== userId) throw new Error("Forbidden");
+  }
+
+  const subdomain = (input.subdomain || "").trim().toLowerCase();
+  const domain = (input.domain || "").trim().toLowerCase();
+  if (!subdomain || !domain) {
+    throw new Error("Subdomain and domain are required");
+  }
+  if (subdomain.length < 4) {
+    throw new Error("Subdomain must be at least 4 characters");
+  }
+  if (!/^[a-z0-9-]+$/.test(subdomain) || subdomain.length > 50) {
+    throw new Error("Subdomain must be 4-50 lowercase letters, numbers, or hyphens");
+  }
+
+  const { available } = await checkPublishUrlAvailability(subdomain, domain, projectId);
+  if (!available) {
+    throw new Error("This URL is already taken by another project");
+  }
+
+  await ProjectModel.updateOne({ _id: projectId }, { $set: { subdomain, domain } });
+  const updated = await getProjectById(projectId);
+  if (!updated) throw new Error("Project not found");
+  logProjectChange(projectId, userId, "Reserved publish URL", "general");
   emitProjectUpdated(projectId);
   return updated;
 }
@@ -665,17 +775,18 @@ export async function updateProjectCustomDomain(
   await ensureUserCanEditProject(userId, project);
 
   const workspaceId = project.workspaceId?.toString();
-  let hasPro = false;
+  let hasPaidPlan = false;
   if (workspaceId) {
     const planStatus = await getWorkspacePlanStatus(workspaceId);
-    hasPro = planStatus === "pro";
+    hasPaidPlan = isPaidPlan(planStatus);
   }
-  if (!hasPro) {
+  if (!hasPaidPlan) {
     const user = await UserModel.findById(userId).select("plan").lean();
-    hasPro = user?.plan === "pro";
+    hasPaidPlan =
+      user?.plan === "pro" || user?.plan === "studio" || user?.plan === "agency";
   }
-  if (!hasPro) {
-    throw new Error("Pro plan required for custom domains");
+  if (!hasPaidPlan) {
+    throw new Error("A paid plan is required for custom domains");
   }
 
   const raw = (input.customDomain ?? "").trim().toLowerCase();
@@ -744,18 +855,19 @@ export async function updateHideToklyBadge(
   await ensureUserCanEditProject(userId, project);
   const hideToklyBadge = input.hideToklyBadge === true;
   if (hideToklyBadge) {
-    let hasPro = false;
+    let hasPaidPlan = false;
     const workspaceId = project.workspaceId?.toString();
     if (workspaceId) {
       const planStatus = await getWorkspacePlanStatus(workspaceId);
-      hasPro = planStatus === "pro";
+      hasPaidPlan = isPaidPlan(planStatus);
     }
-    if (!hasPro) {
+    if (!hasPaidPlan) {
       const user = await UserModel.findById(userId).select("plan").lean();
-      hasPro = user?.plan === "pro";
+      hasPaidPlan =
+        user?.plan === "pro" || user?.plan === "studio" || user?.plan === "agency";
     }
-    if (!hasPro) {
-      throw new Error("Pro plan required to hide the Tokly badge");
+    if (!hasPaidPlan) {
+      throw new Error("A paid plan is required to hide the Tokly badge");
     }
   }
   await ProjectModel.updateOne(
@@ -959,29 +1071,55 @@ Write a brief, friendly 1-2 sentence comment acknowledging the update.`
   };
 }
 
+type MobulaFetchedFields = {
+  price?: number;
+  market_cap?: number;
+  market_cap_diluted?: number;
+  volume?: number;
+  volume_change_24h?: number | null;
+  volume_7d?: number | null;
+  liquidity?: number;
+  price_change_24h?: number;
+  total_supply?: number;
+  circulating_supply?: number;
+  name?: string;
+  symbol?: string;
+  logo?: string;
+  decimals?: number;
+};
+
 /**
- * Merge Mobula token data (price, market_cap, etc.) into existing tokenDetails.
- * Preserves dexUrl, tokenFeatures, launchType, launchPlatformUrl, and user overrides.
+ * Merge Mobula token data into existing tokenDetails.
+ * - priceMarketOnly: cron — only price, market, volume, liquidity, supplies (never name/symbol/logo/decimals).
+ * - full: admin refresh — also syncs name, symbol, logo, decimals from Mobula.
+ * Preserves address, chain, dexUrl, tokenFeatures, launchType, etc.
  */
 function mergeTokenDetailsFromMobula(
   existing: Record<string, unknown> | undefined,
-  fetched: { price?: number; market_cap?: number; market_cap_diluted?: number; volume?: number; volume_change_24h?: number | null; volume_7d?: number | null; liquidity?: number; price_change_24h?: number; total_supply?: number; circulating_supply?: number; name?: string; symbol?: string; logo?: string; decimals?: number }
+  fetched: MobulaFetchedFields,
+  mode: "price_market_only" | "full"
 ): Record<string, unknown> {
   const base = { ...(existing ?? {}) };
   if (fetched.price !== undefined) base.price = fetched.price;
   if (fetched.market_cap !== undefined) base.market_cap = fetched.market_cap;
-  if (fetched.market_cap_diluted !== undefined) base.market_cap_diluted = fetched.market_cap_diluted;
+  if (fetched.market_cap_diluted !== undefined)
+    base.market_cap_diluted = fetched.market_cap_diluted;
   if (fetched.volume !== undefined) base.volume = fetched.volume;
-  if (fetched.volume_change_24h !== undefined) base.volume_change_24h = fetched.volume_change_24h;
+  if (fetched.volume_change_24h !== undefined)
+    base.volume_change_24h = fetched.volume_change_24h;
   if (fetched.volume_7d !== undefined) base.volume_7d = fetched.volume_7d;
   if (fetched.liquidity !== undefined) base.liquidity = fetched.liquidity;
-  if (fetched.price_change_24h !== undefined) base.price_change_24h = fetched.price_change_24h;
+  if (fetched.price_change_24h !== undefined)
+    base.price_change_24h = fetched.price_change_24h;
   if (fetched.total_supply !== undefined) base.total_supply = fetched.total_supply;
-  if (fetched.circulating_supply !== undefined) base.circulating_supply = fetched.circulating_supply;
-  if (fetched.name !== undefined) base.name = fetched.name;
-  if (fetched.symbol !== undefined) base.symbol = fetched.symbol;
-  if (fetched.logo !== undefined) base.logo = fetched.logo;
-  if (fetched.decimals !== undefined) base.decimals = fetched.decimals;
+  if (fetched.circulating_supply !== undefined)
+    base.circulating_supply = fetched.circulating_supply;
+  if (mode === "full") {
+    if (fetched.name !== undefined) base.name = fetched.name;
+    if (fetched.symbol !== undefined) base.symbol = fetched.symbol;
+    if (fetched.logo !== undefined) base.logo = fetched.logo;
+    if (fetched.decimals !== undefined) base.decimals = fetched.decimals;
+  }
   return base;
 }
 
@@ -1018,7 +1156,11 @@ export async function updateAllProjectsTokenData(): Promise<void> {
         });
         continue;
       }
-      const merged = mergeTokenDetailsFromMobula(p.tokenDetails as Record<string, unknown> | undefined, fetched);
+      const merged = mergeTokenDetailsFromMobula(
+        p.tokenDetails as Record<string, unknown> | undefined,
+        fetched,
+        "price_market_only"
+      );
       await ProjectModel.updateOne(
         { _id: p._id },
         { $set: { tokenDetails: merged } }
@@ -1085,7 +1227,11 @@ export async function refreshProjectTokenDetailsForAdmin(projectId: string): Pro
       });
       return { success: false, error: "Failed to fetch token from Mobula" };
     }
-    const merged = mergeTokenDetailsFromMobula(project.tokenDetails as Record<string, unknown> | undefined, fetched);
+    const merged = mergeTokenDetailsFromMobula(
+      project.tokenDetails as Record<string, unknown> | undefined,
+      fetched,
+      "full"
+    );
     await ProjectModel.updateOne(
       { _id: projectId },
       { $set: { tokenDetails: merged } }
@@ -1535,7 +1681,14 @@ export async function updateProjectSocialLinks(
   };
 }
 
-const VALID_TEMPLATE_IDS = ["aurora", "zynex", "brick-rise", "horizon-elite", "apex"] as const;
+const VALID_TEMPLATE_IDS = [
+  "aurora",
+  "zynex",
+  "brick-rise",
+  "horizon-elite",
+  "apex",
+  "velar",
+] as const;
 
 const VALID_AURORA_COLOR_SCHEMA_IDS = [
   "default",
@@ -1669,6 +1822,45 @@ const VALID_APEX_COLOR_SCHEMA_IDS = [
   "apex-mint-fresh",
 ] as const;
 
+const VALID_VELAR_COLOR_SCHEMA_IDS = [
+  "velar-quantum-cyan",
+  "velar-neon-teal",
+  "velar-plasma-violet",
+  "velar-core-amber",
+  "velar-ion-blue",
+  "velar-rose-nebula",
+  "velar-emerald-void",
+  "velar-solar-flare",
+  "velar-lunar-frost",
+  "velar-crimson-pulse",
+  "velar-synth-lime",
+  "velar-royal-gold",
+  "velar-arctic-ice",
+  "velar-void-magenta",
+  "velar-steel-copper",
+  "velar-matrix-terminal",
+  "velar-deep-navy",
+  "velar-blood-orbit",
+  "velar-neon-fuchsia",
+  "velar-periwinkle",
+  "velar-cobalt-flare",
+  "velar-obsidian-jade",
+  "velar-wildfire",
+  "velar-hyper-pink",
+  "velar-glacier",
+  "velar-miami-vice",
+  "velar-synth-rush",
+  "velar-acid-rush",
+  "velar-cherry-bomb",
+  "velar-radio-punk",
+  "velar-sunset-shock",
+  "velar-neon-aqua",
+  "velar-barbie-core",
+  "velar-joker-signal",
+  "velar-plasma-rgb",
+  "velar-cosmic-candy",
+] as const;
+
 const VALID_FONT_IDS = [
   "poppins", "rubik", "unbounded", "roboto", "montserrat", "quicksand",
   "kanit", "pixelify-sans", "bangers", "barriecito", "chewy", "itim",
@@ -1718,7 +1910,9 @@ export async function updateProjectTemplate(
             ? VALID_HORIZON_ELITE_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_HORIZON_ELITE_COLOR_SCHEMA_IDS)[number])
             : templateId === "apex"
               ? VALID_APEX_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_APEX_COLOR_SCHEMA_IDS)[number])
-              : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
+              : templateId === "velar"
+                ? VALID_VELAR_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_VELAR_COLOR_SCHEMA_IDS)[number])
+                : VALID_AURORA_COLOR_SCHEMA_IDS.includes(schemaId as (typeof VALID_AURORA_COLOR_SCHEMA_IDS)[number]));
     if (isValidSchema) {
       setFields.colorSchemaId = schemaId;
     } else {
@@ -2551,7 +2745,7 @@ export async function updateProjectTokenDescription(
   } else if (hasDescriptionKey && description) {
     // Only description sent: regenerate heroText from it
     const descPlain = extractLexicalText(description);
-    const generated = await generateHeroText(descPlain);
+    const generated = await generateHeroTextFromPlainDescription(descPlain);
     heroText = generated ? plainTextToLexicalJSON(generated) : null;
   }
 

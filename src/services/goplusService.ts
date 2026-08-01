@@ -68,7 +68,10 @@ export async function getTokenSecuritySolana(
   const url = `${GOPLUS_BASE}/solana/token_security?contract_addresses=${encodeURIComponent(trimmed)}`;
 
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
     const data = (await res.json()) as {
       code?: number;
       result?: Record<string, SolanaTokenSecurityResult>;
@@ -123,7 +126,10 @@ export async function getTokenSecurityEVM(
   const url = `${GOPLUS_BASE}/token_security/${chainId}?contract_addresses=${encodeURIComponent(normalized)}`;
 
   try {
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
     const data = (await res.json()) as {
       code?: number;
       result?: Record<string, EVMTokenSecurityResult>;

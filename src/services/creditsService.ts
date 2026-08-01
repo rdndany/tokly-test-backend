@@ -5,7 +5,8 @@ import WorkspaceMonthlyCreditsModel from "../models/WorkspaceMonthlyCredits";
 import WorkspaceModel from "../models/Workspace";
 import UserModel from "../models/User";
 import type { PlanId } from "../models/User";
-import { PLAN_LIMITS, PRO_FLEX_CREDITS_DEFAULT } from "../config/planLimits";
+import { PLAN_LIMITS, FLEX_CREDITS_DEFAULT, PRO_FLEX_CREDITS_DEFAULT } from "../config/planLimits";
+import { isPaidPlan, getFlexCreditsForPlan, type PaidPlanTier } from "../config/plans";
 
 function getTodayDateString(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
@@ -47,7 +48,9 @@ export interface CreditsInfo {
 /** Get current user's plan (default 'free' if user not found). */
 export async function getUserPlan(userId: string): Promise<PlanId> {
   const user = await UserModel.findById(userId).select("plan").lean();
-  return user?.plan === "pro" ? "pro" : "free";
+  const plan = user?.plan;
+  if (plan === "pro" || plan === "studio" || plan === "agency") return plan;
+  return "free";
 }
 
 /** Get Pro flex credits limit from user (default from config). */
@@ -68,9 +71,10 @@ export async function getCredits(
     const ws = await WorkspaceModel.findById(workspaceId)
       .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt stripeSubscriptionInterval")
       .lean();
-    if (ws?.planStatus === "pro") {
+    if (ws?.planStatus && isPaidPlan(ws.planStatus)) {
       return getWorkspaceCredits(workspaceId, userId, {
-        flexLimit: ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT,
+        plan: ws.planStatus,
+        flexLimit: getFlexCreditsForPlan(ws.planStatus, ws.proCreditsPerMonth),
         topUpBalance: ws.topUpCreditsBalance ?? 0,
         topUpExpiresAt: ws.topUpCreditsExpiresAt,
         interval: ws.stripeSubscriptionInterval ?? "month",
@@ -110,7 +114,7 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
   }
 
   const flexLimit = await getProFlexLimit(userId);
-  const limits = PLAN_LIMITS.pro;
+  const limits = PLAN_LIMITS[plan];
   const interval: "month" | "year" = "month";
   const now = new Date();
   const periodKey = getPeriodKey(interval, now);
@@ -156,18 +160,19 @@ async function getUserCredits(userId: string): Promise<CreditsInfo> {
   };
 }
 
-/** Get workspace Pro credits (subscription + top-up + user's daily allowance). Supports rollover. */
+/** Get workspace paid-tier credits (subscription + top-up + user's daily allowance). Supports rollover. */
 async function getWorkspaceCredits(
   workspaceId: string,
   userId: string,
   opts: {
+    plan: PaidPlanTier;
     flexLimit: number;
     topUpBalance?: number;
     topUpExpiresAt?: Date | null;
     interval?: "month" | "year";
   }
 ): Promise<CreditsInfo> {
-  const { flexLimit, topUpBalance = 0, topUpExpiresAt, interval = "month" } = opts;
+  const { plan, flexLimit, topUpBalance = 0, topUpExpiresAt, interval = "month" } = opts;
   const now = new Date();
   const date = getTodayDateString();
   const month = getCurrentMonthString();
@@ -221,7 +226,7 @@ async function getWorkspaceCredits(
     UserDailyCreditsModel.findOne({ userId, date }).lean(),
     UserMonthlyCreditsModel.findOne({ userId, month }).lean(),
   ]);
-  const limits = PLAN_LIMITS.pro;
+  const limits = PLAN_LIMITS[plan];
   const usedToday = dailyDoc?.creditsUsed ?? 0;
   const usedBaseMonth = monthlyUserDoc?.creditsUsed ?? 0;
   const baseDailyRemaining = Math.max(0, limits.creditsPerDay - usedToday);
@@ -238,7 +243,7 @@ async function getWorkspaceCredits(
     usedToday,
     usedThisMonth,
     limit,
-    plan: "pro",
+    plan,
     dailyRemaining: baseRemaining,
     proRemaining,
   };
@@ -256,9 +261,10 @@ export async function deductCredits(
     const ws = await WorkspaceModel.findById(workspaceId)
       .select("planStatus proCreditsPerMonth topUpCreditsBalance topUpCreditsExpiresAt stripeSubscriptionInterval")
       .lean();
-    if (ws?.planStatus === "pro") {
+    if (ws?.planStatus && isPaidPlan(ws.planStatus)) {
       return deductWorkspaceCredits(workspaceId, userId, amount, {
-        flexLimit: ws.proCreditsPerMonth ?? PRO_FLEX_CREDITS_DEFAULT,
+        plan: ws.planStatus,
+        flexLimit: getFlexCreditsForPlan(ws.planStatus, ws.proCreditsPerMonth),
         topUpBalance: ws.topUpCreditsBalance ?? 0,
         topUpExpiresAt: ws.topUpCreditsExpiresAt,
         interval: ws.stripeSubscriptionInterval ?? "month",
@@ -338,13 +344,14 @@ async function deductWorkspaceCredits(
   userId: string,
   amount: number,
   opts: {
+    plan: PaidPlanTier;
     flexLimit: number;
     topUpBalance?: number;
     topUpExpiresAt?: Date | null;
     interval?: "month" | "year";
   }
 ): Promise<CreditsInfo> {
-  const { flexLimit, topUpBalance = 0, topUpExpiresAt, interval = "month" } = opts;
+  const { plan, flexLimit, topUpBalance = 0, topUpExpiresAt, interval = "month" } = opts;
   const info = await getWorkspaceCredits(workspaceId, userId, opts);
   if (info.remaining < amount) {
     const err = new Error(
@@ -356,7 +363,7 @@ async function deductWorkspaceCredits(
 
   const date = getTodayDateString();
   const month = getCurrentMonthString();
-  const limits = PLAN_LIMITS.pro;
+  const limits = PLAN_LIMITS[plan];
 
   const [dailyDoc, monthlyUserDoc] = await Promise.all([
     UserDailyCreditsModel.findOne({ userId, date }).lean(),
@@ -415,6 +422,7 @@ async function deductWorkspaceCredits(
     .select("topUpCreditsBalance topUpCreditsExpiresAt stripeSubscriptionInterval")
     .lean();
   return getWorkspaceCredits(workspaceId, userId, {
+    plan,
     flexLimit,
     topUpBalance: ws?.topUpCreditsBalance ?? 0,
     topUpExpiresAt: ws?.topUpCreditsExpiresAt,

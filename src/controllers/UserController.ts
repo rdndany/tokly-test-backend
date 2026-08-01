@@ -137,10 +137,14 @@ export async function getMyPreferences(req: Request, res: Response): Promise<voi
     return;
   }
   try {
-    const user = await UserModel.findById(userId).select("autoAcceptInvitations plan").lean();
+    const user = await UserModel.findById(userId)
+      .select("autoAcceptInvitations plan fullName name")
+      .lean();
     const autoAcceptInvitations = user?.autoAcceptInvitations !== false;
     const plan = user?.plan === "pro" ? "pro" : "free";
-    res.status(200).json({ autoAcceptInvitations, plan });
+    const fullName = (user?.fullName as string | undefined)?.trim() || undefined;
+    const name = (user?.name as string | undefined)?.trim() || undefined;
+    res.status(200).json({ autoAcceptInvitations, plan, fullName, name });
   } catch (error) {
     logger.error("Get my preferences error:", error);
     res.status(500).json({ error: "Failed to load preferences" });

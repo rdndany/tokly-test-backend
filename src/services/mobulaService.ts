@@ -12,6 +12,7 @@ interface MobulaV2TokenDetailsResponse {
     name: string;
     symbol: string;
     logo?: string;
+    description?: string;
     decimals: number;
     priceUSD: number;
     marketCapUSD: number;
@@ -53,6 +54,10 @@ function mapToTokenDetails(
     name: d.name ?? "",
     symbol: d.symbol ?? "",
     logo: d.logo ? String(d.logo) : undefined,
+    description:
+      typeof d.description === "string" && d.description.trim()
+        ? d.description.trim()
+        : undefined,
     decimals: Number(d.decimals) ?? 0,
     price: Number(d.priceUSD) ?? 0,
     market_cap: Number(d.marketCapUSD) ?? 0,
