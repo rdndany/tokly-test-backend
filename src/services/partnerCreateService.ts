@@ -28,7 +28,13 @@ import { fetchTokenDetails } from "./mobulaService";
 import { getTokenSecurity } from "./goplusService";
 import { getDexUrlForBlockchain } from "../utils/dexUtils";
 import type { TokenFeatures } from "../types/tokenDetails";
-import { completeOnboarding } from "./onboardingService";
+import { createClerkClient } from "@clerk/clerk-sdk-node";
+import UserModel from "../models/User";
+import {
+  checkHandleAvailability,
+  completeOnboarding,
+  HANDLE_REGEX,
+} from "./onboardingService";
 import type { PartnerCreatePayload } from "../types/partnerCreate";
 import { DUMMY_PARTNER_CREATE_PAYLOAD } from "../types/partnerCreate";
 import type { SocialLinkItem } from "../types/tokenDetails";
@@ -36,6 +42,10 @@ import { plainTextToLexicalJSON } from "../utils/lexicalHelpers";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("PartnerCreateService");
+
+const clerkClient = config.clerk.secretKey
+  ? createClerkClient({ secretKey: config.clerk.secretKey })
+  : null;
 
 const DEFAULT_TEMPLATE = "zynex";
 
@@ -144,13 +154,117 @@ function resolveAuditKyc(payload: PartnerCreatePayload): {
   };
 }
 
-/** Skip /getting-started for partner signups — auto-complete with a generated handle. */
-async function ensurePartnerUserOnboarding(userId: string, displayName?: string): Promise<void> {
-  const suffix = userId.replace(/\W/g, "").slice(-8).toLowerCase() || "user";
-  const handle = `cs_${suffix}`.slice(0, 30);
+/** Sanitize a string into a valid handle base (letters/numbers/underscore). */
+function sanitizeHandleBase(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 30);
+}
+
+/** Pick an available handle from a preferred base (email local-part, Clerk username, etc.). */
+async function pickAvailableHandle(base: string, userId: string): Promise<string> {
+  let candidate = sanitizeHandleBase(base);
+  if (candidate.length < 3) {
+    const fallback = sanitizeHandleBase(
+      `user${userId.replace(/\W/g, "").slice(-8)}`
+    );
+    candidate = fallback.length >= 3 ? fallback : "user";
+  }
+
+  for (let i = 0; i < 50; i += 1) {
+    const suffix = i === 0 ? "" : String(i + 1);
+    const tryHandle = `${candidate.slice(0, Math.max(3, 30 - suffix.length))}${suffix}`;
+    if (!HANDLE_REGEX.test(tryHandle)) continue;
+    const check = await checkHandleAvailability(tryHandle, userId);
+    if (check.available) return tryHandle;
+  }
+
+  return `u_${userId.replace(/\W/g, "").slice(-8).toLowerCase()}`.slice(0, 30);
+}
+
+type ClerkUserLike = {
+  primaryEmailAddressId?: string | null;
+  emailAddresses?: Array<{ id: string; emailAddress: string }>;
+  username?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  publicMetadata?: Record<string, unknown> | null;
+};
+
+function clerkPrimaryEmail(clerkUser: ClerkUserLike): string | undefined {
+  const emails = clerkUser.emailAddresses ?? [];
+  if (emails.length === 0) return undefined;
+  const primary = clerkUser.primaryEmailAddressId
+    ? emails.find((e) => e.id === clerkUser.primaryEmailAddressId)
+    : undefined;
+  return (primary ?? emails[0])?.emailAddress?.trim().toLowerCase() || undefined;
+}
+
+/**
+ * Skip /getting-started for partner signups.
+ * New users: name/handle from Google/Clerk email (never from project/token name).
+ * Existing users with a handle or completed onboarding: leave name/handle unchanged.
+ */
+async function ensurePartnerUserOnboarding(userId: string): Promise<void> {
   try {
+    const dbUser = await UserModel.findById(userId)
+      .select("handle fullName name")
+      .lean();
+    const existingHandle =
+      (typeof dbUser?.handle === "string" && dbUser.handle.trim()) || "";
+
+    let clerkUser: ClerkUserLike | null = null;
+    if (clerkClient) {
+      try {
+        clerkUser = (await clerkClient.users.getUser(userId)) as ClerkUserLike;
+      } catch (err) {
+        logger.warn("Partner onboarding: failed to load Clerk user:", err);
+      }
+    }
+
+    const meta = (clerkUser?.publicMetadata ?? {}) as {
+      onboardingCompleted?: boolean;
+      handle?: string;
+      fullName?: string;
+    };
+    const metaHandle =
+      typeof meta.handle === "string" && meta.handle.trim() ? meta.handle.trim() : "";
+    const alreadyOnboarded = meta.onboardingCompleted === true;
+    const hasHandle = Boolean(existingHandle || metaHandle);
+
+    // Existing account: never overwrite username/handle (or display name).
+    if (alreadyOnboarded || hasHandle) {
+      if (!alreadyOnboarded) {
+        await completeOnboarding(userId, {
+          companyRole: "founder",
+          companySize: "solo",
+          theme: "dark",
+        });
+      }
+      return;
+    }
+
+    const email = clerkPrimaryEmail(clerkUser ?? {});
+    const emailLocal = email?.split("@")[0] ?? "";
+    const clerkUsername =
+      typeof clerkUser?.username === "string" ? clerkUser.username.trim() : "";
+    const firstName = clerkUser?.firstName?.trim() ?? "";
+    const lastName = clerkUser?.lastName?.trim() ?? "";
+    const fullNameFromClerk = [firstName, lastName].filter(Boolean).join(" ").trim();
+
+    const fullName =
+      fullNameFromClerk ||
+      emailLocal ||
+      clerkUsername ||
+      "User";
+
+    const handleBase = clerkUsername || emailLocal || firstName || "user";
+    const handle = await pickAvailableHandle(handleBase, userId);
+
     await completeOnboarding(userId, {
-      fullName: displayName?.trim() || "Partner User",
+      fullName,
       companyRole: "founder",
       companySize: "solo",
       theme: "dark",
@@ -371,7 +485,7 @@ export async function createProjectFromPartnerCreatePayload(
     },
   });
 
-  await ensurePartnerUserOnboarding(userId, token.name?.trim());
+  await ensurePartnerUserOnboarding(userId);
 
   if (deployment?.subdomain?.trim() && deployment?.domain?.trim()) {
     try {
