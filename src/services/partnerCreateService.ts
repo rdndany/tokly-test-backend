@@ -303,12 +303,17 @@ export async function createProjectFromPartnerCreatePayload(
 
   const projectId = project.id;
 
+  // Always treat partner-create logo as an explicit choice (including clear).
+  // Empty/missing logo must not leave Mobula's broken URL on the project.
+  const logoOverride = token.logo?.trim() || "";
+
   if (token.address?.trim() && token.chain?.trim()) {
     try {
       await updateProjectTokenDetails(userId, projectId, {
         address: token.address.trim(),
         chain: token.chain.trim(),
-        logo: token.logo?.trim(),
+        // Empty string clears Mobula's logo after fetch.
+        logo: logoOverride,
         fromQuestionnaire: true,
       });
     } catch (err) {
@@ -333,11 +338,9 @@ export async function createProjectFromPartnerCreatePayload(
     });
   }
 
-  if (token.logo?.trim()) {
-    await updateProjectTokenLogo(userId, projectId, { logo: token.logo.trim() });
-  } else {
-    await updateProjectTokenLogo(userId, projectId, { logo: undefined });
-  }
+  await updateProjectTokenLogo(userId, projectId, {
+    logo: logoOverride || undefined,
+  });
 
   if (token.dexUrl?.trim()) {
     await updateProjectDexUrl(userId, projectId, { dexUrl: token.dexUrl.trim() });

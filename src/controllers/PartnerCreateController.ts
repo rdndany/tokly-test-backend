@@ -129,8 +129,10 @@ function mergeBlockchainOverride(
   if (typeof raw.symbol === "string") {
     token.symbol = raw.symbol.trim() || undefined;
   }
-  if (typeof raw.logo === "string") {
-    token.logo = raw.logo.trim() || undefined;
+  // Include empty string so "continue without logo" clears Mobula/listing URLs.
+  if ("logo" in raw) {
+    const logo = typeof raw.logo === "string" ? raw.logo.trim() : "";
+    token.logo = logo || undefined;
   }
   if (raw.tokenFeatures && typeof raw.tokenFeatures === "object") {
     token.tokenFeatures = raw.tokenFeatures as NonNullable<

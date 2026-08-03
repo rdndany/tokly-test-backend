@@ -958,6 +958,10 @@ export async function updateProjectTokenDetails(
   // Use logo override when user provided a different URL
   if (input.logo !== undefined) {
     tokenDetails.logo = input.logo || undefined;
+  } else if (input.fromQuestionnaire) {
+    // Don't persist Mobula's logo during token setup — it is often broken.
+    // The logo questionnaire confirms/uploads before we store one.
+    tokenDetails.logo = undefined;
   }
   // If token has price, it's launched: set launchType and clear launchPlatformUrl
   const hasPrice = (tokenDetails.price ?? 0) > 0;
@@ -1467,7 +1471,7 @@ export async function updateProjectTokenFeatures(
 export async function updateProjectTokenLogo(
   userId: string,
   projectId: string,
-  input: { logo?: string }
+  input: { logo?: string; markStepComplete?: boolean }
 ) {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
@@ -1486,9 +1490,10 @@ export async function updateProjectTokenLogo(
     ...project.tokenDetails,
     logo: input.logo || undefined,
   };
+  const markStepComplete = input.markStepComplete !== false;
   const installationSteps = {
     ...project.installationSteps,
-    logoStepCompleted: true,
+    ...(markStepComplete ? { logoStepCompleted: true } : {}),
   };
 
   const updated = await ProjectModel.findByIdAndUpdate(

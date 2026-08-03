@@ -1569,8 +1569,13 @@ export async function updateTokenDetails(
   const hasLogoKey = "logo" in (req.body || {});
   if (hasLogoKey) {
     try {
+      const markStepComplete =
+        typeof req.body?.markStepComplete === "boolean"
+          ? req.body.markStepComplete
+          : undefined;
       const project = await updateTokenLogoService(userId, projectId, {
         logo: logo || undefined,
+        markStepComplete,
       });
       res.status(200).json(project);
     } catch (err) {
