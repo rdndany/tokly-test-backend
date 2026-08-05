@@ -2323,20 +2323,24 @@ export async function updateProjectTokenomics(
     if (!Array.isArray(input.allocations)) {
       throw new Error("allocations must be an array");
     }
+
+    if (input.allocations.length === 0) {
+      updateFields.allocations = [];
+    } else {
     const allocations = input.allocations
       .filter(
-        (a) =>
-          a &&
-          typeof a.name === "string" &&
-          a.name.trim().length > 0 &&
-          typeof a.percentage === "number" &&
-          a.percentage >= 0 &&
-          a.percentage <= 100
+        (a) => {
+          if (!a || typeof a.name !== "string" || a.name.trim().length === 0) {
+            return false;
+          }
+          const pct = Number(a.percentage);
+          return Number.isFinite(pct) && pct >= 0 && pct <= 100;
+        }
       )
       .map((a) => ({
         id: String(a.id || uuidv4()),
         name: String(a.name).trim().slice(0, 50),
-        percentage: Math.round(a.percentage * 10) / 10,
+        percentage: Math.round(Number(a.percentage) * 10) / 10,
         color: /^#[0-9A-Fa-f]{6}$/.test(String(a.color || "")) ? String(a.color) : "#10B981",
       }));
 
@@ -2361,6 +2365,7 @@ export async function updateProjectTokenomics(
     }
 
     updateFields.allocations = allocations;
+    }
   }
 
   if (Object.keys(updateFields).length === 0) {
@@ -2817,34 +2822,36 @@ export async function updateProjectTokenDetailsByNameSymbol(
     launchType?: string;
     launchPlatformUrl?: string;
     fromQuestionnaire?: boolean;
+    fromGeneralSettings?: boolean;
   }
 ) {
   const project = await getProjectById(projectId);
   if (!project) throw new Error("Project not found");
   await ensureUserCanEditProject(userId, project);
 
-  const tokenDetails: {
-    name: string;
-    symbol: string;
-    launchType?: string;
-    launchPlatformUrl?: string;
-  } = {
+  const existing = project.tokenDetails ?? {};
+  const tokenDetails = {
+    ...existing,
     name: input.name.trim(),
     symbol: input.symbol.trim(),
   };
   if (input.launchType) tokenDetails.launchType = input.launchType.trim();
   if (input.launchPlatformUrl)
     tokenDetails.launchPlatformUrl = input.launchPlatformUrl.trim();
-  const newTitle = `${tokenDetails.name} - ${tokenDetails.symbol}`;
 
   const installationSteps = {
     ...project.installationSteps,
     tokenDetailsStepCompleted: true,
   };
 
+  const updateFields: Record<string, unknown> = { tokenDetails, installationSteps };
+  if (!input.fromGeneralSettings) {
+    updateFields.title = `${tokenDetails.name} - ${tokenDetails.symbol}`;
+  }
+
   const updated = await ProjectModel.findByIdAndUpdate(
     projectId,
-    { $set: { tokenDetails, title: newTitle, installationSteps } },
+    { $set: updateFields },
     { new: true }
   ).lean();
   if (!updated) throw new Error("Project not found");
@@ -2855,7 +2862,7 @@ export async function updateProjectTokenDetailsByNameSymbol(
   const tokenSavedContent = buildTokenBrief(updated.tokenDetails, summary);
 
   const projectIdObj = new mongoose.Types.ObjectId(projectId);
-  if (!input.fromQuestionnaire) {
+  if (!input.fromQuestionnaire && !input.fromGeneralSettings) {
     const lastMessage = await ProjectChatMessageModel.findOne(
       { projectId: projectIdObj },
       {},

@@ -1514,6 +1514,7 @@ export async function updateTokenDetails(
   if (name && symbol) {
     const fromQuestionnaire =
       req.body?.fromQuestionnaire === true || req.body?._fromQuestionnaire === true;
+    const fromGeneralSettings = req.body?.fromGeneralSettings === true;
     try {
       const project = await updateTokenDetailsByNameSymbolService(
         userId,
@@ -1524,6 +1525,7 @@ export async function updateTokenDetails(
           ...(launchType && { launchType }),
           ...(launchPlatformUrl && { launchPlatformUrl }),
           fromQuestionnaire,
+          fromGeneralSettings,
         }
       );
       res.status(200).json(project);
