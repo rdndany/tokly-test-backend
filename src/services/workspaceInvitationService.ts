@@ -9,6 +9,10 @@ import {
   ensureUserCanAccessWorkspace,
   ensureUserCanManageWorkspace,
 } from "./workspaceService";
+import {
+  assertWorkspaceCanAcceptMember,
+  assertWorkspaceCanAddSeats,
+} from "./workspaceSeatService";
 
 const INVITATION_EXPIRY_DAYS = 7;
 
@@ -45,6 +49,7 @@ export async function createInvitation(
   if (!normalizedEmail) throw new Error("Email is required");
 
   await ensureUserCanManageWorkspace(invitedBy, workspaceId);
+  await assertWorkspaceCanAddSeats(workspaceId, 1);
 
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + INVITATION_EXPIRY_DAYS);
@@ -198,6 +203,8 @@ export async function acceptInvitationByToken(
     return { workspaceId };
   }
 
+  await assertWorkspaceCanAcceptMember(workspaceId);
+
   await WorkspaceMemberModel.create({
     workspaceId: inv.workspaceId,
     userId,
@@ -246,6 +253,16 @@ export async function processPendingInvitationsForEmail(
         { status: "accepted", acceptedAt: new Date(), acceptedBy: userId }
       );
       workspaceIds.push(workspaceIdStr);
+      continue;
+    }
+
+    try {
+      await assertWorkspaceCanAcceptMember(workspaceIdStr);
+    } catch {
+      await WorkspaceInvitationModel.updateOne(
+        { _id: inv._id },
+        { status: "cancelled" }
+      );
       continue;
     }
 
@@ -364,6 +381,7 @@ export async function createInviteLink(
   userId: string
 ): Promise<{ token: string; expiresAt: string }> {
   await ensureUserCanManageWorkspace(userId, workspaceId);
+  await assertWorkspaceCanAddSeats(workspaceId, 1);
 
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + INVITATION_EXPIRY_DAYS);

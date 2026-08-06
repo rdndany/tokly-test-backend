@@ -13,7 +13,8 @@ export interface PlanTierConfig {
   liveSites: number;
   creditsPerDay: number;
   creditsPerMonthBase: number;
-  maxSeats: number;
+  /** Total workspace members (owner included). `null` = unlimited. */
+  maxSeats: number | null;
 }
 
 export const PLAN_TIER_CONFIG: Record<PaidPlanTier, PlanTierConfig> = {
@@ -25,7 +26,7 @@ export const PLAN_TIER_CONFIG: Record<PaidPlanTier, PlanTierConfig> = {
     liveSites: 3,
     creditsPerDay: 5,
     creditsPerMonthBase: 150,
-    maxSeats: 1,
+    maxSeats: 2,
   },
   studio: {
     id: "studio",
@@ -45,7 +46,7 @@ export const PLAN_TIER_CONFIG: Record<PaidPlanTier, PlanTierConfig> = {
     liveSites: 30,
     creditsPerDay: 5,
     creditsPerMonthBase: 150,
-    maxSeats: 10,
+    maxSeats: null,
   },
 };
 
@@ -53,6 +54,8 @@ export const FREE_PLAN_CONFIG = {
   liveSites: 1,
   creditsPerDay: 5,
   creditsPerMonth: 30,
+  /** Owner only — no invites on Free. */
+  maxSeats: 1,
 };
 
 const TIER_RANK: Record<WorkspacePlanTier, number> = {
@@ -90,6 +93,19 @@ export function getFlexCreditsForPlan(status?: string | null, stored?: number): 
     return stored ?? PLAN_TIER_CONFIG[status].flexCreditsPerMonth;
   }
   return 0;
+}
+
+/** Total members allowed (owner included). `null` = unlimited (Agency). */
+export function getMaxSeats(status?: string | null): number | null {
+  if (isPaidPlan(status)) return PLAN_TIER_CONFIG[status].maxSeats;
+  if (status === "inactive") return FREE_PLAN_CONFIG.maxSeats;
+  return FREE_PLAN_CONFIG.maxSeats;
+}
+
+/** Whether the plan allows inviting anyone beyond the solo owner. */
+export function canInviteMembers(status?: string | null): boolean {
+  const maxSeats = getMaxSeats(status);
+  return maxSeats === null || maxSeats > 1;
 }
 
 export function isTierAtLeast(
