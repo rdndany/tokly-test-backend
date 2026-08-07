@@ -27,6 +27,14 @@ import {
   updateAnnouncementHandler,
   deleteAnnouncementHandler,
 } from "../controllers/AdminController";
+import {
+  composeInboxThreads,
+  listAdminInboxThreads,
+  getAdminInboxThread,
+  replyAdminInboxThread,
+  markAdminInboxThreadRead,
+  getInboxRecipientCount,
+} from "../controllers/AdminInboxController";
 
 const router = Router();
 
@@ -52,6 +60,20 @@ router.get("/announcements", checkAdminAuth, getAnnouncementsHandler);
 router.post("/announcements", checkAdminAuth, createAnnouncementHandler);
 router.patch("/announcements/:id", checkAdminAuth, updateAnnouncementHandler);
 router.delete("/announcements/:id", checkAdminAuth, deleteAnnouncementHandler);
+router.get("/inbox/recipient-count", checkAdminAuth, getInboxRecipientCount);
+router.get("/inbox/threads", checkAdminAuth, listAdminInboxThreads);
+router.post("/inbox/threads", checkAdminAuth, composeInboxThreads);
+router.get("/inbox/threads/:threadId", checkAdminAuth, getAdminInboxThread);
+router.post(
+  "/inbox/threads/:threadId/messages",
+  checkAdminAuth,
+  replyAdminInboxThread
+);
+router.post(
+  "/inbox/threads/:threadId/read",
+  checkAdminAuth,
+  markAdminInboxThreadRead
+);
 router.get("/users/:userId", checkAdminAuth, getUserById);
 router.patch("/users/:userId/role", checkAdminAuth, updateUserRole);
 router.delete("/users/:userId", checkAdminAuth, removeUser);

@@ -29,6 +29,11 @@ export const checkAdminAuth = async (
       return;
     }
 
+    req.auth = {
+      userId: auth.userId,
+      sessionId: auth.sessionId ?? "",
+    };
+
     next();
   } catch (error) {
     logger.error("Admin check error:", error);

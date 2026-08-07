@@ -23,6 +23,7 @@ import affiliateRoutes from "./routes/affiliateRoutes";
 import dailyStatsRoutes from "./routes/dailyStatsRoutes";
 import ga4Routes from "./routes/ga4Routes";
 import partnerRoutes from "./routes/partnerRoutes";
+import inboxRoutes from "./routes/inboxRoutes";
 import { stripeWebhook } from "./controllers/StripeController";
 import { startTokenUpdateCron } from "./services/cronService";
 
@@ -76,6 +77,7 @@ app.use("/api/affiliate", affiliateRoutes);
 app.use("/api/stats", dailyStatsRoutes);
 app.use("/api/ga4", ga4Routes);
 app.use("/api/partners", partnerRoutes);
+app.use("/api/inbox", inboxRoutes);
 
 const start = async () => {
   await connectDatabase();

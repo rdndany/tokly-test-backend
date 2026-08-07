@@ -1,5 +1,22 @@
 import { emitToProject, emitToUser, emitToWorkspace } from "./index";
 import type { ChatMessage } from "../services/chatService";
+import UserModel from "../models/User";
+
+export function emitInboxUpdated(userId: string): void {
+  emitToUser(userId, "inbox:updated", {});
+}
+
+/** Notify all users marked admin in DB (best-effort realtime for admin inbox). */
+export async function emitInboxUpdatedToAdmins(): Promise<void> {
+  try {
+    const admins = await UserModel.find({ role: "admin" }).select("_id").lean();
+    for (const admin of admins) {
+      emitInboxUpdated(String(admin._id));
+    }
+  } catch {
+    // ignore — list refetch still works
+  }
+}
 
 export function emitChatMessage(projectId: string, message: ChatMessage): void {
   emitToProject(projectId, "chat:message", message);
