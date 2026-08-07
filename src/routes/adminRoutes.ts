@@ -37,6 +37,13 @@ import {
   closeAdminInboxThread,
   reopenAdminInboxThread,
 } from "../controllers/AdminInboxController";
+import {
+  listAdminWhatsNew,
+  createAdminWhatsNew,
+  updateAdminWhatsNew,
+  deleteAdminWhatsNew,
+  regenerateAdminWhatsNewSummary,
+} from "../controllers/AdminWhatsNewController";
 
 const router = Router();
 
@@ -85,6 +92,15 @@ router.post(
   "/inbox/threads/:threadId/reopen",
   checkAdminAuth,
   reopenAdminInboxThread
+);
+router.get("/whats-new", checkAdminAuth, listAdminWhatsNew);
+router.post("/whats-new", checkAdminAuth, createAdminWhatsNew);
+router.patch("/whats-new/:id", checkAdminAuth, updateAdminWhatsNew);
+router.delete("/whats-new/:id", checkAdminAuth, deleteAdminWhatsNew);
+router.post(
+  "/whats-new/:id/regenerate-summary",
+  checkAdminAuth,
+  regenerateAdminWhatsNewSummary
 );
 router.get("/users/:userId", checkAdminAuth, getUserById);
 router.patch("/users/:userId/role", checkAdminAuth, updateUserRole);

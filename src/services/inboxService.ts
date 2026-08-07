@@ -15,6 +15,7 @@ import {
   emitInboxUpdated,
   emitInboxUpdatedToAdmins,
 } from "../socket/events";
+import { getUnreadCount as getWhatsNewUnreadCount } from "./whatsNewService";
 
 export interface InboxMessageDto {
   id: string;
@@ -401,9 +402,10 @@ export async function reopenThread(
 export async function getUserUnreadSummary(userId: string): Promise<{
   unreadThreads: number;
   pendingInvitations: number;
+  whatsNewUnread: number;
   total: number;
 }> {
-  const [unreadThreads, pendingInvitations] = await Promise.all([
+  const [unreadThreads, pendingInvitations, whatsNewUnread] = await Promise.all([
     InboxThreadModel.countDocuments({
       participantUserId: userId,
       userUnreadCount: { $gt: 0 },
@@ -418,11 +420,13 @@ export async function getUserUnreadSummary(userId: string): Promise<{
         expiresAt: { $gt: new Date() },
       });
     })(),
+    getWhatsNewUnreadCount(userId),
   ]);
   return {
     unreadThreads,
     pendingInvitations,
-    total: unreadThreads + pendingInvitations,
+    whatsNewUnread,
+    total: unreadThreads + pendingInvitations + whatsNewUnread,
   };
 }
 

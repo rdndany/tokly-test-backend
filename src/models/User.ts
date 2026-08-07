@@ -25,6 +25,8 @@ export interface UserDocument extends Omit<Document, "_id"> {
   affiliateCode?: string;
   /** Solana wallet address for affiliate commission withdrawals. */
   solanaWallet?: string;
+  /** When the user last opened the What's New tab (for unread badge). */
+  whatsNewLastSeenAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -101,6 +103,7 @@ const userSchema = new Schema<UserDocument>({
     unique: true,
   },
   solanaWallet: { type: String, trim: true },
+  whatsNewLastSeenAt: { type: Date },
   createdAt: {
     type: Date,
     required: true,
