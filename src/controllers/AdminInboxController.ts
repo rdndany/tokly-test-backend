@@ -120,7 +120,9 @@ export async function replyAdminInboxThread(
     const status =
       message === "Thread not found"
         ? HTTPSTATUS.NOT_FOUND
-        : message.includes("required") || message.includes("too long")
+        : message.includes("required") ||
+            message.includes("too long") ||
+            message.includes("closed")
           ? HTTPSTATUS.BAD_REQUEST
           : HTTPSTATUS.INTERNAL_SERVER_ERROR;
     if (status === HTTPSTATUS.INTERNAL_SERVER_ERROR) {
@@ -167,5 +169,67 @@ export async function getInboxRecipientCount(
     res
       .status(HTTPSTATUS.INTERNAL_SERVER_ERROR)
       .json({ message: "Failed to count users" });
+  }
+}
+
+export async function closeAdminInboxThread(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const adminUserId = getAdminId(req);
+    if (!adminUserId) {
+      res.status(HTTPSTATUS.UNAUTHORIZED).json({ message: "Unauthorized" });
+      return;
+    }
+    const threadId = req.params.threadId;
+    if (!threadId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "threadId is required" });
+      return;
+    }
+    const thread = await InboxService.closeThread(adminUserId, threadId);
+    res.status(HTTPSTATUS.OK).json({ thread });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to close conversation";
+    const status =
+      message === "Thread not found"
+        ? HTTPSTATUS.NOT_FOUND
+        : HTTPSTATUS.INTERNAL_SERVER_ERROR;
+    if (status === HTTPSTATUS.INTERNAL_SERVER_ERROR) {
+      logger.error("closeAdminInboxThread error:", error);
+    }
+    res.status(status).json({ message });
+  }
+}
+
+export async function reopenAdminInboxThread(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const adminUserId = getAdminId(req);
+    if (!adminUserId) {
+      res.status(HTTPSTATUS.UNAUTHORIZED).json({ message: "Unauthorized" });
+      return;
+    }
+    const threadId = req.params.threadId;
+    if (!threadId) {
+      res.status(HTTPSTATUS.BAD_REQUEST).json({ message: "threadId is required" });
+      return;
+    }
+    const thread = await InboxService.reopenThread(adminUserId, threadId);
+    res.status(HTTPSTATUS.OK).json({ thread });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to reopen conversation";
+    const status =
+      message === "Thread not found"
+        ? HTTPSTATUS.NOT_FOUND
+        : HTTPSTATUS.INTERNAL_SERVER_ERROR;
+    if (status === HTTPSTATUS.INTERNAL_SERVER_ERROR) {
+      logger.error("reopenAdminInboxThread error:", error);
+    }
+    res.status(status).json({ message });
   }
 }

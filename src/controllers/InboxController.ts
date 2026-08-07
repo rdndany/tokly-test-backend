@@ -81,7 +81,9 @@ export async function replyToMyThread(
         ? HTTPSTATUS.FORBIDDEN
         : message === "Thread not found"
           ? HTTPSTATUS.NOT_FOUND
-          : message.includes("required") || message.includes("too long")
+          : message.includes("required") ||
+              message.includes("too long") ||
+              message.includes("closed")
             ? HTTPSTATUS.BAD_REQUEST
             : HTTPSTATUS.INTERNAL_SERVER_ERROR;
     if (status === HTTPSTATUS.INTERNAL_SERVER_ERROR) {

@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { randomUUID } from "crypto";
 import InboxThreadModel, {
   type InboxAudience,
+  type InboxThreadStatus,
   type IInboxThread,
 } from "../models/InboxThread";
 import InboxMessageModel, {
@@ -38,6 +39,8 @@ export interface InboxThreadListItemDto {
   adminUnreadCount: number;
   audience: InboxAudience;
   broadcastId?: string;
+  status: InboxThreadStatus;
+  closedAt?: string;
   createdAt: string;
 }
 
@@ -86,6 +89,8 @@ function threadToListItem(
     adminUnreadCount: thread.adminUnreadCount,
     audience: thread.audience,
     broadcastId: thread.broadcastId,
+    status: thread.status ?? "open",
+    closedAt: thread.closedAt?.toISOString(),
     createdAt: thread.createdAt.toISOString(),
   };
 }
@@ -159,6 +164,7 @@ export async function composeThreads(
     adminUnreadCount: 0,
     audience,
     broadcastId,
+    status: "open" as const,
   }));
 
   const threads = await InboxThreadModel.insertMany(threadsToInsert);
@@ -264,6 +270,9 @@ export async function replyAsUser(
   if (thread.participantUserId !== userId) {
     throw new Error("Forbidden");
   }
+  if ((thread.status ?? "open") === "closed") {
+    throw new Error("This conversation is closed");
+  }
 
   const msg = await InboxMessageModel.create({
     threadId: thread._id,
@@ -294,6 +303,9 @@ export async function replyAsAdmin(
   if (body.length > 5000) throw new Error("Message body is too long");
 
   const thread = await getThreadOrThrow(threadId);
+  if ((thread.status ?? "open") === "closed") {
+    throw new Error("This conversation is closed");
+  }
 
   const msg = await InboxMessageModel.create({
     threadId: thread._id,
@@ -336,6 +348,54 @@ export async function markThreadReadByAdmin(
   thread.adminUnreadCount = 0;
   await thread.save();
   void emitInboxUpdatedToAdmins();
+}
+
+export async function closeThread(
+  adminUserId: string,
+  threadId: string
+): Promise<InboxThreadListItemDto> {
+  const thread = await getThreadOrThrow(threadId);
+  if ((thread.status ?? "open") === "closed") {
+    const userMap = await loadUsersMap([thread.participantUserId]);
+    return threadToListItem(thread, userMap.get(thread.participantUserId));
+  }
+
+  thread.status = "closed";
+  thread.closedAt = new Date();
+  thread.closedByAdminId = adminUserId;
+  thread.userUnreadCount = 0;
+  thread.adminUnreadCount = 0;
+  await thread.save();
+
+  emitInboxUpdated(thread.participantUserId);
+  emitInboxUpdated(adminUserId);
+  void emitInboxUpdatedToAdmins();
+
+  const userMap = await loadUsersMap([thread.participantUserId]);
+  return threadToListItem(thread, userMap.get(thread.participantUserId));
+}
+
+export async function reopenThread(
+  adminUserId: string,
+  threadId: string
+): Promise<InboxThreadListItemDto> {
+  const thread = await getThreadOrThrow(threadId);
+  if ((thread.status ?? "open") === "open") {
+    const userMap = await loadUsersMap([thread.participantUserId]);
+    return threadToListItem(thread, userMap.get(thread.participantUserId));
+  }
+
+  thread.status = "open";
+  thread.set("closedAt", undefined);
+  thread.set("closedByAdminId", undefined);
+  await thread.save();
+
+  emitInboxUpdated(thread.participantUserId);
+  emitInboxUpdated(adminUserId);
+  void emitInboxUpdatedToAdmins();
+
+  const userMap = await loadUsersMap([thread.participantUserId]);
+  return threadToListItem(thread, userMap.get(thread.participantUserId));
 }
 
 export async function getUserUnreadSummary(userId: string): Promise<{

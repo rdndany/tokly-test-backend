@@ -34,6 +34,8 @@ import {
   replyAdminInboxThread,
   markAdminInboxThreadRead,
   getInboxRecipientCount,
+  closeAdminInboxThread,
+  reopenAdminInboxThread,
 } from "../controllers/AdminInboxController";
 
 const router = Router();
@@ -73,6 +75,16 @@ router.post(
   "/inbox/threads/:threadId/read",
   checkAdminAuth,
   markAdminInboxThreadRead
+);
+router.post(
+  "/inbox/threads/:threadId/close",
+  checkAdminAuth,
+  closeAdminInboxThread
+);
+router.post(
+  "/inbox/threads/:threadId/reopen",
+  checkAdminAuth,
+  reopenAdminInboxThread
 );
 router.get("/users/:userId", checkAdminAuth, getUserById);
 router.patch("/users/:userId/role", checkAdminAuth, updateUserRole);

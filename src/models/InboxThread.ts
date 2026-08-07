@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export type InboxAudience = "direct" | "broadcast";
+export type InboxThreadStatus = "open" | "closed";
 
 export interface IInboxThread extends Document {
   participantUserId: string;
@@ -12,6 +13,9 @@ export interface IInboxThread extends Document {
   adminUnreadCount: number;
   audience: InboxAudience;
   broadcastId?: string;
+  status: InboxThreadStatus;
+  closedAt?: Date;
+  closedByAdminId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +35,14 @@ const InboxThreadSchema = new Schema<IInboxThread>(
       default: "direct",
     },
     broadcastId: { type: String, index: true, sparse: true },
+    status: {
+      type: String,
+      enum: ["open", "closed"],
+      default: "open",
+      index: true,
+    },
+    closedAt: { type: Date },
+    closedByAdminId: { type: String },
   },
   { timestamps: true }
 );
